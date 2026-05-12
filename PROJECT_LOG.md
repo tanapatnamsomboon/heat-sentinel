@@ -14,7 +14,7 @@ Running record of what's done and what's next. Updated at the end of every step.
 | 4 | Output devices: rework `drivers/led` for the **RGB LED module (HW-479)** — 3 channels / named colours — and add `drivers/buzzer`; `main.c` switches the boot-scan indicator to status colours and adds a startup beep. | ✅ |
 | 5 | SH1106 128×64 OLED driver: init (with the 2 px column offset), `set_cursor`, 5×8 ASCII text, `clear`. | ✅ |
 | 6 | DS1307 RTC driver: BCD conversion, get/set time, auto-seed from build time when the clock-halt bit is set; show time on the OLED. | ✅ |
-| 7 | DHT11 driver: single-wire read, checksum validation, retry policy, interrupts masked during the timing-critical read. | ⬜ |
+| 7 | DHT11 driver: single-wire read, checksum validation, retry policy, interrupts masked during the timing-critical read. | ✅ |
 | 8 | USART driver (interrupt-driven RX ring buffer) + ESP-01 non-blocking AT state machine (reset → join AP → TCP → HTTP GET → close). May split into 8a/8b. | ⬜ |
 | 9 | Application integration: state machine — sample → OLED with timestamp → threshold check → RGB-LED + buzzer alert → telemetry upload; graceful degradation when WiFi/ESP is unavailable. | ⬜ |
 | 10 | Polish: `app_config.h(.example)` for thresholds & WiFi creds, watchdog timer, error/status surfaced on the OLED, README/log finalization. | ⬜ |
@@ -98,6 +98,18 @@ Running record of what's done and what's next. Updated at the end of every step.
   3. *(hardware — DS1307 absent)* Line 2 reads "RTC: not found"; the OLED is still green and otherwise normal.
   4. *(sanity)* The seconds field should roll 59 → 00 and bump minutes; the date should be plausible (≈ the build date) on a cold start.
 
+### Step 7 — DHT11 temperature/humidity driver ✅
+- `src/drivers/dht11.{c,h}`: single-wire bit-bang read on `DHT11_PIN` (PB0). `dht11_status_t` (OK / BUSY / NO_RESPONSE / TIMEOUT / BAD_CHECKSUM), `dht11_reading_t { humidity, temperature }` (8-bit integers — DHT11 has no fractional part; RH = byte0, T = byte2; checksum = sum of bytes 0..3). `dht11_init()` parks the line released (idle-HIGH via the external pull-up) and primes the interval timer. `dht11_read(out)`: enforces `DHT11_MIN_INTERVAL_MS` (2000, returns DHT11_BUSY if polled sooner), then — 20 ms low start pulse (interrupts on) → `ATOMIC_BLOCK` (interrupts off, ~5 ms): release, wait line-HIGH, wait response-LOW/HIGH, then 40 bits (`_delay_us(40)` sample point between a '0' ~26 µs and a '1' ~70 µs high pulse), then validate the checksum. Phase waits are bounded by `DHT11_PHASE_LOOPS` (~200 iterations ≈ ~250 µs) so a stuck line can't hang the read. Timer0 `millis()` loses a few ms per read — immaterial (DS1307 is the real clock).
+  - "Retry policy" = the scheduled task simply re-reads every 2 s and `main.c` keeps showing the last good value in between (rather than blocking the loop with `_delay_ms` retry spins inside one call).
+- `src/main.c`: `dht11_init()` in the boot sequence; a 2 s `dht_task` reads the sensor and shows `Temp: NN C` (line 4) / `Humi: NN %` (line 5). Boot screen now: banner / rule / date / time / "Temp: -- C" / "Humi: -- %" / "I2C dev: N" / addresses. `dht_task` keeps the last good value on a transient error; after 3 consecutive failures with no prior reading it shows "Temp: no sensor?". A `dht_task` is added at 2000 ms (its first read fires ≈2 s after boot — also gives the DHT11 its post-power-on settle time).
+- `CMakeLists.txt`: added `src/drivers/dht11.c`. README + CLAUDE.md updated.
+- **Validation:**
+  1. `cmake --build --preset default` compiles clean under `-Wall -Wextra`; `avr-size` grows ~0.4–0.6 KB flash.
+  2. *(hardware — DHT11 wired to PB0 with its pull-up)* ≈2 s after boot, lines 4–5 change from `-- C` / `-- %` to a plausible reading (e.g. 22–28 °C / 40–60 %RH indoors), refreshing every 2 s. Breathe on the sensor → humidity rises within a few seconds; cup it in your hand → temperature rises a degree or two.
+  3. *(hardware — DHT11 absent / mis-wired)* lines 4–5 stay at `-- C` / `-- %`; after ~6 s line 4 shows `Temp: no sensor?`. The rest of the UI (clock, green LED) is unaffected — a bad DHT11 read can't hang the loop.
+  4. *(sanity)* No visible glitch in the 1 Hz clock when a DHT read happens (the ~5 ms interrupts-off window is invisible); the buzzer chirp at boot is its usual ~120 ms.
+  5. *(troubleshooting)* Always `Temp: 0 C` / `Humi: 0 %` or wild values → check the pull-up and that `DHT11_PIN` matches your wiring. Persistent `no sensor?` → no pull-up, wrong pin, or the DHT11 wasn't given ~1 s after power-up (the 2 s first-read delay should cover it).
+
 ## Key decisions
 
 - **Language:** C, `-std=gnu11`, `-Os -g -Wall -Wextra`, sections GC'd.
@@ -116,4 +128,4 @@ Running record of what's done and what's next. Updated at the end of every step.
 
 ## Next up
 
-**Step 7 — DHT11 temperature/humidity driver** (`drivers/dht11.{c,h}`): single-wire bit-bang read (start pulse → response → 40 data bits, timed with `_delay_us`), checksum-validated, with interrupts masked during the timing-critical section and a small retry policy. Honours the DHT11's ≥1 s minimum sampling interval. `main.c` (a scheduled task) will show `temp`/`humidity` on the OLED. Starts after the Step 6 commit.
+**Step 8 — USART driver + ESP-01 AT layer** (`hal/uart.{c,h}` + `drivers/esp01.{c,h}`): interrupt-driven USART RX ring buffer @ 9600 baud, plus a non-blocking AT state machine (reset → join AP → open TCP → HTTP GET → close), ticked from the superloop so a slow upload never freezes the OLED. WiFi SSID/pass + telemetry host/path come from an untracked `app_config.h` (generated from a committed `app_config.h.example`; created in this step or Step 10). May split 8a (UART) / 8b (ESP-01). `main.c` will show WiFi state on the OLED and upload temp/humidity periodically. Starts after the Step 7 commit.

@@ -5,12 +5,11 @@ It reads a DHT11, timestamps readings with a DS1307 RTC, shows status on an
 SH1106 OLED, raises an RGB-LED + buzzer alert above a threshold, and pushes
 telemetry to the cloud over an ESP-01 WiFi module (UART AT commands).
 
-> **Status:** Step 6 of 10 complete — build system, a 1 ms `millis()` tick, GPIO
+> **Status:** Step 7 of 10 complete — build system, a 1 ms `millis()` tick, GPIO
 > helpers, a cooperative scheduler, a blocking-with-timeout I²C (TWI) master +
-> bus scanner, the RGB-LED (HW-479) driver, a buzzer driver, the SH1106 OLED
-> driver, and the DS1307 RTC driver are in place. At boot the app chirps, scans
-> the I²C bus, seeds the RTC from the build time if it was halted, and shows the
-> scan result + a live date/time clock on the OLED. See
+> bus scanner, the RGB-LED (HW-479), buzzer, SH1106 OLED, DS1307 RTC, and DHT11
+> drivers are in place. The OLED shows a live date/time clock plus temperature &
+> humidity refreshed every 2 s; the RGB LED mirrors OLED bring-up status. See
 > [`PROJECT_LOG.md`](PROJECT_LOG.md) for the full roadmap and progress.
 
 ## Hardware
@@ -46,7 +45,8 @@ heat-sentinel/
 │  │  ├─ led.{c,h}                 # RGB LED (HW-479) on LED_R/G/B_PIN — named colours
 │  │  ├─ buzzer.{c,h}              # buzzer: on/off + beep(ms); tone(freq,ms) via Timer2/OC2B
 │  │  ├─ sh1106.{c,h}              # SH1106 128×64 OLED — text (5×8 font), no framebuffer
-│  │  └─ ds1307.{c,h}              # DS1307 RTC — BCD time get/set; seed from build time on cold start
+│  │  ├─ ds1307.{c,h}              # DS1307 RTC — BCD time get/set; seed from build time on cold start
+│  │  └─ dht11.{c,h}               # DHT11 temp/humidity — bit-banged, checksum, cli() during the read
 │  └─ app/
 │     └─ scheduler.{c,h}           # cooperative {period, last_run, fn} scheduler
 ├─ README.md                       # this file (kept up to date each step)
@@ -155,11 +155,11 @@ the `flash` target on purpose.)
 ## Notes / current limitations
 
 - The application logic is still a stand-in: `main.c` chirps the buzzer, scans
-  the I²C bus, brings up the OLED, seeds the RTC from the build time if it was
-  halted, prints the scan result, and refreshes a date/time clock once a second.
+  the I²C bus, brings up the OLED, seeds the RTC if halted, then runs scheduled
+  jobs — a 1 Hz clock refresh and a 2 s DHT11 read (temp/humidity on screen).
   RGB LED: **green** if the OLED is up, **yellow** if devices were found but the
-  OLED didn't init, **red** if nothing answered. The threshold-driven alert and
-  the live sensor / WiFi screens land in Steps 7–9.
+  OLED didn't init, **red** if nothing answered. The threshold-driven RGB/buzzer
+  alert and the WiFi upload land in Steps 8–9.
 - OLED driver is **framebuffer-less** (text written straight to the SH1106 — no
   1 KB shadow buffer): a 5×8 font, 21 chars × 8 lines, `'\n'`/right-edge wrap.
   `SH1106_I2C_ADDR` (default `0x3C`), `SH1106_FLIP_180` and `SH1106_COL_OFFSET`
@@ -176,9 +176,14 @@ the `flash` target on purpose.)
   polarity — **many MH-FMD-style boards are active-low**, so set it to `0` if the
   buzzer is on at rest. For a passive buzzer the tone comes from Timer2 driving
   OC2B; Timer2 is only used while a tone is sounding.
+- DHT11: single-wire bit-bang read on `DHT11_PIN` (default `PB0`), checksum-
+  validated, ≥1 s between reads (the driver enforces `DHT11_MIN_INTERVAL_MS`,
+  2 s). Interrupts are masked for the ~5 ms of bit timing — `millis()` loses a
+  few ms per read (immaterial; the DS1307 is the authoritative clock). The data
+  line's pull-up is part of your hardware (it's on the usual DHT11 breakout).
 - I²C runs at 100 kHz (the DS1307's maximum); SDA/SCL **external pull-ups are
   part of your hardware** — the firmware does not enable the AVR's internal ones.
-- No DHT11 / ESP-01 drivers yet; they arrive in Steps 7–8.
+- No ESP-01 driver yet; it arrives in Step 8.
 - WiFi credentials and the telemetry endpoint will live in an untracked
   `app_config.h` generated from a committed `app_config.h.example` (Step 10).
 

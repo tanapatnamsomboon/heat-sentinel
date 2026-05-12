@@ -88,7 +88,7 @@ deliberately *not* part of the `flash` target — documented in `README.md`.
 
 ## Current state
 
-Step 6 complete. In place:
+Step 7 complete. In place:
 - `board.h` — pin map as `(LETTER, BIT)` pairs + `F_CPU` fallback. DHT11 `PB0`; RGB LED `PB1/PB2/PB3` (`LED_RGB_ACTIVE_HIGH=1`, HW-479 common-cathode); buzzer `PD3`/OC2B (`BUZZER_ACTIVE_HIGH=1`); optional `ESP_RST_PIN` commented.
 - `hal/gpio.h` — zero-cost GPIO macros consuming a board.h pin pair.
 - `hal/timer.{c,h}` — Timer0 CTC → 1 ms `millis()` (atomic 32-bit read); needs `sei()` after `timer_init()`.
@@ -97,17 +97,20 @@ Step 6 complete. In place:
 - `drivers/buzzer.{c,h}` — `buzzer_init/on/off`, non-blocking `buzzer_beep(ms)` (active buzzer) and `buzzer_tone(freq_hz, ms)` (passive buzzer; Timer2 CTC toggling OC2B/PD3, used only while sounding), `buzzer_tick()` (call from loop), `buzzer_is_sounding()`. Polarity from `BUZZER_ACTIVE_HIGH`.
 - `drivers/sh1106.{c,h}` — SH1106 128×64 OLED over `hal/i2c`, **framebuffer-less** (text written straight to the panel). `sh1106_init()` (probes `SH1106_I2C_ADDR`=`0x3C`, runs init seq, clears — returns `false` if absent), `sh1106_clear/clear_line/set_cursor` (cursor `(x:0..127, page:0..7)`, 2-px `SH1106_COL_OFFSET` applied internally), `sh1106_putc/puts/put_uint/put_hex8/print_line` (5×8 PROGMEM font, 6-px cell ⇒ 21 chars/line, `'\n'` + wrap), `sh1106_set_inverted/set_on`. `SH1106_FLIP_180` toggles orientation.
 - `drivers/ds1307.{c,h}` — DS1307 RTC over `hal/i2c` helpers. `ds1307_time_t` (sec/min/hour 24h, day/month/year-as-yy, weekday). `ds1307_present`, `ds1307_get_time`/`ds1307_set_time` (set clears CH ⇒ starts oscillator, 24h mode, clamps day/month/weekday), `ds1307_init_or_seed()` (boot: if CH set, seed from `__DATE__`/`__TIME__`; returns 1/0/-1). BCD↔dec internal.
+- `drivers/dht11.{c,h}` — DHT11 on `DHT11_PIN` (PB0). `dht11_status_t`, `dht11_reading_t { humidity, temperature }` (8-bit). `dht11_init()`, `dht11_read(out)` — enforces `DHT11_MIN_INTERVAL_MS` (2 s) returning `DHT11_BUSY`; 20 ms start pulse (IRQs on) then `ATOMIC_BLOCK` (IRQs off, ~5 ms) for the response + 40 bits; checksum-validated; phase waits bounded by `DHT11_PHASE_LOOPS`. Single attempt per call — the scheduler re-reads every 2 s.
 - `app/scheduler.{c,h}` — fixed-table cooperative scheduler: `sched_add(period_ms, fn)` + `sched_tick()`, wraparound-safe.
-- `main.c` — superloop: inits, boot-time `i2c_scan()`, `sh1106_init()`, `ds1307_init_or_seed()`, boot chirp; prints the scan result to the OLED; a 1 Hz `rtc_task` shows the date/time. RGB colour mirrors OLED status (green/yellow/red); calls `sched_tick()` + `buzzer_tick()`. Still a stand-in for the real app logic.
+- `main.c` — superloop: inits, boot-time `i2c_scan()`, `sh1106_init()`, `ds1307_init_or_seed()`, `dht11_init()`, boot chirp; prints the scan result to the OLED; a 1 Hz `rtc_task` shows the date/time and a 2 s `dht_task` shows temp/humidity. RGB colour mirrors OLED status (green/yellow/red); calls `sched_tick()` + `buzzer_tick()`. Still a stand-in for the real app logic.
 
 Timer usage so far: **Timer0** = `millis()`; **Timer2** = buzzer tone (only while sounding); **Timer1** = free.
 
 Sources live under `src/` with `src/` on the include path; every new `.c` must be
 added to `add_executable(...)` in `CMakeLists.txt` (no globbing).
 
-Next: Step 7 — DHT11 driver (`drivers/dht11.{c,h}`): single-wire bit-bang read,
-checksum-validated, interrupts masked during the timing-critical part, small
-retry policy, ≥1 s sampling interval. `main.c` shows temp/humidity on the OLED.
+Next: Step 8 — `hal/uart.{c,h}` (interrupt-driven RX ring buffer @ 9600 baud)
++ `drivers/esp01.{c,h}` (non-blocking AT state machine: reset → join AP → TCP →
+HTTP GET → close), ticked from the superloop. Untracked `app_config.h`
+(SSID/pass, telemetry host/path) from a committed `.example`. `main.c` shows
+WiFi state on the OLED + uploads readings. May split 8a (UART) / 8b (ESP-01).
 
 ## Reference: old code from another project
 
