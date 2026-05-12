@@ -77,17 +77,21 @@ deliberately *not* part of the `flash` target — documented in `README.md`.
 
 ## Current state
 
-Step 2 complete. In place: `board.h` (pin map as `(LETTER, BIT)` pairs + `F_CPU`),
-`hal/gpio.h` (zero-cost GPIO macros), `hal/timer.{c,h}` (Timer0 CTC → 1 ms
-`millis()`, atomic read; needs `sei()` after `timer_init()`), `drivers/led.{c,h}`,
-`app/scheduler.{c,h}` (fixed-table cooperative scheduler: `sched_add(period, fn)`
-+ `sched_tick()`, wraparound-safe). `main.c` is a superloop that registers a
-1 Hz heartbeat-LED task — still a stand-in for the real app logic. Sources live
-under `src/` with `src/` on the include path; new `.c` files go in
-`add_executable(...)` in `CMakeLists.txt`.
+Step 3 complete. In place:
+- `board.h` — pin map as `(LETTER, BIT)` pairs + `F_CPU` fallback.
+- `hal/gpio.h` — zero-cost GPIO macros consuming a board.h pin pair.
+- `hal/timer.{c,h}` — Timer0 CTC → 1 ms `millis()` (atomic 32-bit read); needs `sei()` after `timer_init()`.
+- `hal/i2c.{c,h}` — TWI master, blocking with timeout; 7-bit addresses; primitives (`i2c_start/rep_start/stop/write/read_ack/read_nack`) + helpers (`i2c_probe`, `i2c_scan`, `i2c_write_reg`, `i2c_read_reg`). 100 kHz default (DS1307 limit); external SDA/SCL pull-ups are the user's hardware.
+- `drivers/led.{c,h}` — `led_init/on/off/toggle/set` on `LED_PIN`.
+- `app/scheduler.{c,h}` — fixed-table cooperative scheduler: `sched_add(period_ms, fn)` + `sched_tick()`, wraparound-safe.
+- `main.c` — superloop: inits, boot-time `i2c_scan()`, blink rate on the alert LED encodes whether any I²C device answered. Still a stand-in for the real app logic.
 
-Next: Step 3 — I²C (TWI) master HAL (`hal/i2c.{c,h}`, blocking-with-timeout) +
-a small bus scanner for bench bring-up.
+Sources live under `src/` with `src/` on the include path; every new `.c` must be
+added to `add_executable(...)` in `CMakeLists.txt` (no globbing).
+
+Next: Step 4 — SH1106 128×64 OLED driver (`drivers/sh1106.{c,h}`): init + 2-px
+column offset, page/column addressing, `clear`, `set_cursor`, 5×8 ASCII text;
+`main.c` shows the I²C scan result + banner on screen.
 
 ## Reference: old code from another project
 

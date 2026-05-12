@@ -29,6 +29,7 @@ set(FW_TARGET heat_sentinel)
 add_executable(${FW_TARGET}
     src/main.c
     src/hal/timer.c
+    src/hal/i2c.c
     src/drivers/led.c
     src/app/scheduler.c
 )

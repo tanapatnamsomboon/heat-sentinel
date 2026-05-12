@@ -5,10 +5,11 @@ It reads a DHT11, timestamps readings with a DS1307 RTC, shows status on an
 SH1106 OLED, raises a GPIO LED alert above a threshold, and pushes telemetry to
 the cloud over an ESP-01 WiFi module (UART AT commands).
 
-> **Status:** Step 2 of 9 complete — build system, a 1 ms `millis()` tick, GPIO
-> helpers, an LED driver, and a small cooperative scheduler are in place; the
-> application currently just blinks a ~1 Hz heartbeat LED through the scheduler.
-> See [`PROJECT_LOG.md`](PROJECT_LOG.md) for the full roadmap and progress.
+> **Status:** Step 3 of 9 complete — build system, a 1 ms `millis()` tick, GPIO
+> helpers, an LED driver, a cooperative scheduler, and a blocking-with-timeout
+> I²C (TWI) master + bus scanner are in place. The app scans the I²C bus at boot
+> and reports the result on the alert LED (slow blink = ≥1 device, fast blink =
+> none). See [`PROJECT_LOG.md`](PROJECT_LOG.md) for the full roadmap and progress.
 
 ## Hardware
 
@@ -36,7 +37,8 @@ heat-sentinel/
 │  ├─ main.c                       # superloop: init + register scheduled jobs
 │  ├─ hal/                         # hardware layer
 │  │  ├─ gpio.h                    # zero-cost GPIO macros, pins as (LETTER, BIT)
-│  │  └─ timer.{c,h}               # Timer0 -> 1 ms millis() tick
+│  │  ├─ timer.{c,h}               # Timer0 -> 1 ms millis() tick
+│  │  └─ i2c.{c,h}                 # TWI master (blocking + timeout) + bus scanner
 │  ├─ drivers/
 │  │  └─ led.{c,h}                 # alert LED on LED_PIN
 │  └─ app/
@@ -146,11 +148,13 @@ the `flash` target on purpose.)
 
 ## Notes / current limitations
 
-- The application logic is still a stand-in: `main.c` only blinks the alert LED
-  at ~1 Hz to exercise the `millis()` tick and the scheduler. Real behaviour
-  (sensor read, OLED, RTC timestamp, threshold alert, WiFi upload) lands in
-  Steps 4–8.
-- No I²C / OLED / RTC / DHT11 / ESP-01 drivers yet; they arrive in Steps 3–7.
+- The application logic is still a stand-in: `main.c` scans the I²C bus once at
+  boot and then blinks the alert LED — slow (~1 Hz) if any device ACKed, fast
+  (~3 Hz) if none did. Real behaviour (OLED, RTC timestamp, sensor read,
+  threshold alert, WiFi upload) lands in Steps 4–8.
+- I²C runs at 100 kHz (the DS1307's maximum); SDA/SCL **external pull-ups are
+  part of your hardware** — the firmware does not enable the AVR's internal ones.
+- No SH1106 / DS1307 / DHT11 / ESP-01 drivers yet; they arrive in Steps 4–7.
 - WiFi credentials and the telemetry endpoint will live in an untracked
   `app_config.h` generated from a committed `app_config.h.example` (Step 9).
 
