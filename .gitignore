@@ -1,0 +1,27 @@
+# --- Build output ---
+/build/
+/cmake-build-*/
+*.o
+*.elf
+*.hex
+*.eep
+*.lst
+*.map
+compile_commands.json
+
+# --- Local / secret config (generated from *.example) ---
+include/app_config.h
+src/app_config.h
+
+# --- IDE / editor ---
+.idea/
+.vscode/
+*.code-workspace
+.cache/
+
+# --- Claude Code local settings ---
+.claude/settings.local.json
+
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
