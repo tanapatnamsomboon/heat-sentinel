@@ -12,7 +12,7 @@ Running record of what's done and what's next. Updated at the end of every step.
 | 2 | Core infrastructure: `board.h` (pin map, clocked from `F_CPU`), Timer0 `millis()`, GPIO helpers, LED driver, cooperative scheduler skeleton. | ✅ |
 | 3 | I²C (TWI) master HAL driver + a tiny bus scanner for bring-up. | ✅ |
 | 4 | Output devices: rework `drivers/led` for the **RGB LED module (HW-479)** — 3 channels / named colours — and add `drivers/buzzer`; `main.c` switches the boot-scan indicator to status colours and adds a startup beep. | ✅ |
-| 5 | SH1106 128×64 OLED driver: init (with the 2 px column offset), `set_cursor`, 5×8 ASCII text, `clear`. | ⬜ |
+| 5 | SH1106 128×64 OLED driver: init (with the 2 px column offset), `set_cursor`, 5×8 ASCII text, `clear`. | ✅ |
 | 6 | DS1307 RTC driver: BCD conversion, get/set time, auto-seed from build time when the clock-halt bit is set; show time on the OLED. | ⬜ |
 | 7 | DHT11 driver: single-wire read, checksum validation, retry policy, interrupts masked during the timing-critical read. | ⬜ |
 | 8 | USART driver (interrupt-driven RX ring buffer) + ESP-01 non-blocking AT state machine (reset → join AP → TCP → HTTP GET → close). May split into 8a/8b. | ⬜ |
@@ -71,6 +71,20 @@ Running record of what's done and what's next. Updated at the end of every step.
   3. *(hardware — buzzer)* You should hear a short ~120 ms chirp once at power-up. Silent or just a faint click on a beep → it's a passive buzzer (the chirp already uses the tone path, so it should chirp); if the buzzer is **continuously on** at rest → set `BUZZER_ACTIVE_HIGH = 0` in `board.h`. To sanity-check the tone path, scope PD3 during the chirp → ~2.3 kHz square wave.
 - **Build fix (post-Step-4):** first build failed — `led.c` used parameterized wrapper macros (`LED_CH_ON_(pin)`/`LED_CH_OFF_(pin)`) routing through the 1-arg `gpio_high`/`gpio_low`, so the `(LETTER, BIT)` pin pair got pre-expanded into two args before reaching them (`error: macro 'gpio_low' passed 2 arguments, but takes just 1`). Rewrote `led.c` to set channels via the public `gpio_write(pin, level)` macro (3-arg internal target → pin pair expands correctly). Committed as `fix: led.c — drive RGB channels via gpio_write() so the (LETTER,BIT) pin pair expands correctly`.
 
+### Step 5 — SH1106 128×64 OLED driver ✅
+- `src/drivers/sh1106.{c,h}`: framebuffer-less SH1106 over the `hal/i2c` master (no 1 KB shadow buffer — text is written straight to the panel; cheap on a 2 KB-RAM part).
+  - Config (overridable): `SH1106_I2C_ADDR` (default `0x3C`), `SH1106_COL_OFFSET` (default `2` — the 132-col controller centres the 128-px panel), `SH1106_FLIP_180` (segment-remap / COM-scan-dir choice in the init sequence). `SH1106_WIDTH/HEIGHT/PAGES/COLS` exported.
+  - `sh1106_init()` probes `0x3C` first → returns `false` if absent; otherwise pushes a 25-byte init sequence (display off → clock/mux/offset/start-line → DC-DC on → seg-remap + COM-dir → COM-pins `0x12` → contrast/pre-charge/VCOMH → resume-to-RAM → non-inverted → display on) as one I²C transaction (PROGMEM), then `sh1106_clear()`.
+  - Cursor model `(x: 0..127, page: 0..7)`; the 2-px offset is applied when programming column address. `sh1106_set_cursor` (clamps, batches the 3 page/column commands), `sh1106_clear_line`, `sh1106_clear` (whole panel, cursor → 0,0; clears re-sync the cursor with the controller afterwards since SH1106 auto-increments columns).
+  - Text: a 5×8 PROGMEM font for printable ASCII `0x20..0x7E` (95 glyphs, ~475 B flash); 6-px cell ⇒ 21 chars/line. `sh1106_putc` (handles `'\n'` and right-edge wrap to the next page; out-of-range chars → `'?'`), `sh1106_puts`, `sh1106_put_uint` (decimal), `sh1106_put_hex8` (two hex digits), `sh1106_print_line(page, s)` (= clear that line + puts). Also `sh1106_set_inverted` / `sh1106_set_on`.
+- `src/main.c`: `bool oled_ok = sh1106_init();` after the I²C scan. If OK: prints "Heat Sentinel", a rule, "I2C devices: N", and each found address as "0xNN" (4 per row). LED colour now 3-state — **green** (OLED up) / **yellow** (devices found, OLED init failed) / **red** (nothing on the bus). Boot chirp unchanged.
+- `CMakeLists.txt`: added `src/drivers/sh1106.c`. README + CLAUDE.md updated.
+- **Validation:**
+  1. `cmake --build --preset default` compiles clean under `-Wall -Wextra`; `avr-size` grows ~0.7–1 KB flash (mostly the font + init data).
+  2. *(hardware)* With the OLED wired (SDA=PC4, SCL=PC5, pull-ups, addr 0x3C) → on power-up the screen shows the banner + "I2C devices: N" + the address list, and the RGB LED is **green**. The 1-px column offset means text starts flush at the left edge (no 2-px stripe on the left, no wrapped sliver on the right).
+  3. *(hardware — fallbacks)* DS1307 (or anything) on the bus but the OLED unplugged/at the wrong address → LED **yellow**, screen blank. Nothing on the bus at all → LED **red**.
+  4. *(troubleshooting)* Image upside-down or mirrored → set `SH1106_FLIP_180 1` (or 0) and rebuild. A 2-px blank stripe on the left / garbage sliver on the right → adjust `SH1106_COL_OFFSET`. Module doesn't respond at all → it may be at `0x3D` (set `SH1106_I2C_ADDR`).
+
 ## Key decisions
 
 - **Language:** C, `-std=gnu11`, `-Os -g -Wall -Wextra`, sections GC'd.
@@ -89,4 +103,4 @@ Running record of what's done and what's next. Updated at the end of every step.
 
 ## Next up
 
-**Step 5 — SH1106 128×64 OLED driver** (`drivers/sh1106.{c,h}`): init sequence, the 2-px column offset, page/column addressing, `clear`, `set_cursor`, 5×8 ASCII text (`print_char`/`print_string` with auto-wrap). Built on the I²C HAL; `main.c` will show the I²C scan result (device list) and a banner on screen. Starts after the Step 4 commit.
+**Step 6 — DS1307 RTC driver** (`drivers/ds1307.{c,h}`): BCD↔decimal conversion, `ds1307_get_time`/`ds1307_set_time` over the I²C HAL (register-pointer reads), and on boot — if the clock-halt (CH) bit is set — seed the clock from build-time `__DATE__`/`__TIME__`. `main.c` (a scheduled task) will show the time/date on the OLED. Starts after the Step 5 commit.

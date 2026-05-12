@@ -88,24 +88,25 @@ deliberately *not* part of the `flash` target — documented in `README.md`.
 
 ## Current state
 
-Step 4 complete. In place:
+Step 5 complete. In place:
 - `board.h` — pin map as `(LETTER, BIT)` pairs + `F_CPU` fallback. DHT11 `PB0`; RGB LED `PB1/PB2/PB3` (`LED_RGB_ACTIVE_HIGH=1`, HW-479 common-cathode); buzzer `PD3`/OC2B (`BUZZER_ACTIVE_HIGH=1`); optional `ESP_RST_PIN` commented.
 - `hal/gpio.h` — zero-cost GPIO macros consuming a board.h pin pair.
 - `hal/timer.{c,h}` — Timer0 CTC → 1 ms `millis()` (atomic 32-bit read); needs `sei()` after `timer_init()`.
 - `hal/i2c.{c,h}` — TWI master, blocking with timeout; 7-bit addresses; primitives (`i2c_start/rep_start/stop/write/read_ack/read_nack`) + helpers (`i2c_probe`, `i2c_scan`, `i2c_write_reg`, `i2c_read_reg`). 100 kHz default (DS1307 limit); external SDA/SCL pull-ups are the user's hardware.
 - `drivers/led.{c,h}` — RGB LED (HW-479): `led_color_t` enum, `led_init/set/get/off/toggle(color)`; channel polarity from `LED_RGB_ACTIVE_HIGH`. Digital on/off per channel (8 states).
 - `drivers/buzzer.{c,h}` — `buzzer_init/on/off`, non-blocking `buzzer_beep(ms)` (active buzzer) and `buzzer_tone(freq_hz, ms)` (passive buzzer; Timer2 CTC toggling OC2B/PD3, used only while sounding), `buzzer_tick()` (call from loop), `buzzer_is_sounding()`. Polarity from `BUZZER_ACTIVE_HIGH`.
+- `drivers/sh1106.{c,h}` — SH1106 128×64 OLED over `hal/i2c`, **framebuffer-less** (text written straight to the panel). `sh1106_init()` (probes `SH1106_I2C_ADDR`=`0x3C`, runs init seq, clears — returns `false` if absent), `sh1106_clear/clear_line/set_cursor` (cursor `(x:0..127, page:0..7)`, 2-px `SH1106_COL_OFFSET` applied internally), `sh1106_putc/puts/put_uint/put_hex8/print_line` (5×8 PROGMEM font, 6-px cell ⇒ 21 chars/line, `'\n'` + wrap), `sh1106_set_inverted/set_on`. `SH1106_FLIP_180` toggles orientation.
 - `app/scheduler.{c,h}` — fixed-table cooperative scheduler: `sched_add(period_ms, fn)` + `sched_tick()`, wraparound-safe.
-- `main.c` — superloop: inits, boot-time `i2c_scan()`, boot chirp, RGB blink colour encodes whether any I²C device answered (green/red); calls `sched_tick()` + `buzzer_tick()`. Still a stand-in for the real app logic.
+- `main.c` — superloop: inits, boot-time `i2c_scan()`, `sh1106_init()`, boot chirp; prints the scan result to the OLED; RGB colour mirrors it (green = OLED OK, yellow = devices found but OLED init failed, red = nothing); calls `sched_tick()` + `buzzer_tick()`. Still a stand-in for the real app logic.
 
 Timer usage so far: **Timer0** = `millis()`; **Timer2** = buzzer tone (only while sounding); **Timer1** = free.
 
 Sources live under `src/` with `src/` on the include path; every new `.c` must be
 added to `add_executable(...)` in `CMakeLists.txt` (no globbing).
 
-Next: Step 5 — SH1106 128×64 OLED driver (`drivers/sh1106.{c,h}`): init + 2-px
-column offset, page/column addressing, `clear`, `set_cursor`, 5×8 ASCII text;
-`main.c` shows the I²C scan result (device list) + banner on screen.
+Next: Step 6 — DS1307 RTC driver (`drivers/ds1307.{c,h}`): BCD↔dec, `ds1307_get_time`/
+`ds1307_set_time` via the I²C HAL; on boot, if the clock-halt (CH) bit is set,
+seed from build-time `__DATE__`/`__TIME__`. `main.c` shows the time/date on the OLED.
 
 ## Reference: old code from another project
 

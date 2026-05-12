@@ -1,19 +1,17 @@
 /*
  * Heat Sentinel - ATmega328P @ 8 MHz.
  *
- * Step 4: RGB LED (HW-479) + buzzer drivers are online. With no display yet, the
- * boot-time I2C scan shows up as a colour on the alert LED:
- *   - green, slow blink -> at least one device ACKed (bus OK; once both are
- *                          wired, expect the SH1106 OLED @ 0x3C and the
- *                          DS1307 RTC @ 0x68)
- *   - red,   fast blink -> nothing answered (check SDA/SCL wiring & pull-ups)
- * A short chirp at boot confirms the buzzer works. Step 5 adds the OLED.
+ * Step 5: the SH1106 OLED driver is online. The boot-time I2C scan result is now
+ * shown on the screen; the RGB LED also mirrors it (green = bus + OLED OK,
+ * yellow = devices found but OLED init failed, red = nothing on the bus) and the
+ * buzzer chirps once. Sensor / RTC / WiFi screens arrive in later steps.
  */
 
 #include "hal/i2c.h"
 #include "hal/timer.h"
 #include "drivers/led.h"
 #include "drivers/buzzer.h"
+#include "drivers/sh1106.h"
 #include "app/scheduler.h"
 
 #include <avr/interrupt.h>
@@ -35,14 +33,30 @@ int main(void)
 
     uint8_t found[8];
     uint8_t n = i2c_scan(found, (uint8_t)sizeof found);
+    bool oled_ok = sh1106_init();   /* probes 0x3C, runs the init sequence, clears */
 
-    s_blink_color = (n > 0) ? LED_GREEN : LED_RED;
+    s_blink_color = oled_ok ? LED_GREEN : (n > 0 ? LED_YELLOW : LED_RED);
     buzzer_tone(2300, 120);         /* boot chirp (works for a passive buzzer) */
+
+    if (oled_ok) {
+        sh1106_print_line(0, "Heat Sentinel");
+        sh1106_print_line(1, "----------------");
+        sh1106_set_cursor(0, 3);
+        sh1106_puts("I2C devices: ");
+        sh1106_put_uint(n);
+        for (uint8_t i = 0; i < n && i < (uint8_t)sizeof found; i++) {
+            sh1106_set_cursor((uint8_t)((i % 4u) * 32u), (uint8_t)(4u + i / 4u));
+            sh1106_putc('0');
+            sh1106_putc('x');
+            sh1106_put_hex8(found[i]);
+        }
+    }
+
     sched_add((n > 0) ? 500 : 150, status_blink_task);
 
     for (;;) {
         sched_tick();
-        buzzer_tick();              /* end the beep/tone once its duration elapses */
+        buzzer_tick();
         /* further scheduled jobs (sensor, display, RTC, WiFi) join here later */
     }
 }

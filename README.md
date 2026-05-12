@@ -5,11 +5,11 @@ It reads a DHT11, timestamps readings with a DS1307 RTC, shows status on an
 SH1106 OLED, raises an RGB-LED + buzzer alert above a threshold, and pushes
 telemetry to the cloud over an ESP-01 WiFi module (UART AT commands).
 
-> **Status:** Step 4 of 10 complete — build system, a 1 ms `millis()` tick, GPIO
+> **Status:** Step 5 of 10 complete — build system, a 1 ms `millis()` tick, GPIO
 > helpers, a cooperative scheduler, a blocking-with-timeout I²C (TWI) master +
-> bus scanner, the RGB-LED (HW-479) driver, and a buzzer driver are in place. The
-> app scans the I²C bus at boot and reports the result on the RGB LED (green slow
-> blink = ≥1 device, red fast blink = none) plus a startup chirp. See
+> bus scanner, the RGB-LED (HW-479) driver, a buzzer driver, and the SH1106 OLED
+> driver are in place. At boot the app chirps, scans the I²C bus, prints the
+> result to the OLED, and mirrors it on the RGB LED. See
 > [`PROJECT_LOG.md`](PROJECT_LOG.md) for the full roadmap and progress.
 
 ## Hardware
@@ -43,7 +43,8 @@ heat-sentinel/
 │  │  └─ i2c.{c,h}                 # TWI master (blocking + timeout) + bus scanner
 │  ├─ drivers/
 │  │  ├─ led.{c,h}                 # RGB LED (HW-479) on LED_R/G/B_PIN — named colours
-│  │  └─ buzzer.{c,h}              # buzzer: on/off + beep(ms); tone(freq,ms) via Timer2/OC2B
+│  │  ├─ buzzer.{c,h}              # buzzer: on/off + beep(ms); tone(freq,ms) via Timer2/OC2B
+│  │  └─ sh1106.{c,h}              # SH1106 128×64 OLED — text (5×8 font), no framebuffer
 │  └─ app/
 │     └─ scheduler.{c,h}           # cooperative {period, last_run, fn} scheduler
 ├─ README.md                       # this file (kept up to date each step)
@@ -152,9 +153,14 @@ the `flash` target on purpose.)
 ## Notes / current limitations
 
 - The application logic is still a stand-in: `main.c` chirps the buzzer, scans
-  the I²C bus once at boot, then blinks the RGB LED — **green ~1 Hz** if any
-  device ACKed, **red ~3 Hz** if none did. The threshold-driven alert (and OLED,
-  RTC timestamp, sensor read, WiFi upload) lands in Steps 5–9.
+  the I²C bus once at boot, prints the result to the OLED, and mirrors it on the
+  RGB LED — **green** if the OLED is up, **yellow** if devices were found but the
+  OLED didn't init, **red** if nothing answered. The threshold-driven alert (and
+  the live sensor / RTC / WiFi screens) lands in Steps 6–9.
+- OLED driver is **framebuffer-less** (text written straight to the SH1106 — no
+  1 KB shadow buffer): a 5×8 font, 21 chars × 8 lines, `'\n'`/right-edge wrap.
+  `SH1106_I2C_ADDR` (default `0x3C`), `SH1106_FLIP_180` and `SH1106_COL_OFFSET`
+  are overridable; if the image is upside-down/mirrored set `SH1106_FLIP_180 1`.
 - RGB LED is digital on/off per channel (8 states: off + 7 colours); polarity is
   `LED_RGB_ACTIVE_HIGH` in `board.h` (HW-479 is common-cathode → `1`). PWM colour
   mixing is a possible later extension.
@@ -164,7 +170,7 @@ the `flash` target on purpose.)
   OC2B; Timer2 is only used while a tone is sounding.
 - I²C runs at 100 kHz (the DS1307's maximum); SDA/SCL **external pull-ups are
   part of your hardware** — the firmware does not enable the AVR's internal ones.
-- No SH1106 / DS1307 / DHT11 / ESP-01 drivers yet; they arrive in Steps 5–8.
+- No DS1307 / DHT11 / ESP-01 drivers yet; they arrive in Steps 6–8.
 - WiFi credentials and the telemetry endpoint will live in an untracked
   `app_config.h` generated from a committed `app_config.h.example` (Step 10).
 
