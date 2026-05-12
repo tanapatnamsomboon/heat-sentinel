@@ -33,6 +33,7 @@ add_executable(${FW_TARGET}
     src/drivers/led.c
     src/drivers/buzzer.c
     src/drivers/sh1106.c
+    src/drivers/ds1307.c
     src/app/scheduler.c
 )
 

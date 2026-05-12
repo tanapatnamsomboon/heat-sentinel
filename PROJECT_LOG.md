@@ -13,7 +13,7 @@ Running record of what's done and what's next. Updated at the end of every step.
 | 3 | I²C (TWI) master HAL driver + a tiny bus scanner for bring-up. | ✅ |
 | 4 | Output devices: rework `drivers/led` for the **RGB LED module (HW-479)** — 3 channels / named colours — and add `drivers/buzzer`; `main.c` switches the boot-scan indicator to status colours and adds a startup beep. | ✅ |
 | 5 | SH1106 128×64 OLED driver: init (with the 2 px column offset), `set_cursor`, 5×8 ASCII text, `clear`. | ✅ |
-| 6 | DS1307 RTC driver: BCD conversion, get/set time, auto-seed from build time when the clock-halt bit is set; show time on the OLED. | ⬜ |
+| 6 | DS1307 RTC driver: BCD conversion, get/set time, auto-seed from build time when the clock-halt bit is set; show time on the OLED. | ✅ |
 | 7 | DHT11 driver: single-wire read, checksum validation, retry policy, interrupts masked during the timing-critical read. | ⬜ |
 | 8 | USART driver (interrupt-driven RX ring buffer) + ESP-01 non-blocking AT state machine (reset → join AP → TCP → HTTP GET → close). May split into 8a/8b. | ⬜ |
 | 9 | Application integration: state machine — sample → OLED with timestamp → threshold check → RGB-LED + buzzer alert → telemetry upload; graceful degradation when WiFi/ESP is unavailable. | ⬜ |
@@ -84,6 +84,19 @@ Running record of what's done and what's next. Updated at the end of every step.
   2. *(hardware)* With the OLED wired (SDA=PC4, SCL=PC5, pull-ups, addr 0x3C) → on power-up the screen shows the banner + "I2C devices: N" + the address list, and the RGB LED is **green**. The 1-px column offset means text starts flush at the left edge (no 2-px stripe on the left, no wrapped sliver on the right).
   3. *(hardware — fallbacks)* DS1307 (or anything) on the bus but the OLED unplugged/at the wrong address → LED **yellow**, screen blank. Nothing on the bus at all → LED **red**.
   4. *(troubleshooting)* Image upside-down or mirrored → set `SH1106_FLIP_180 1` (or 0) and rebuild. A 2-px blank stripe on the left / garbage sliver on the right → adjust `SH1106_COL_OFFSET`. Module doesn't respond at all → it may be at `0x3D` (set `SH1106_I2C_ADDR`).
+- *(bench note, end of Step 5)* User confirmed on hardware: OLED shows "I2C devices: 1 / 0x3C" — only the OLED was wired; the DS1307 (0x68) wasn't connected yet. RGB LED green, build/font/scan all good.
+
+### Step 6 — DS1307 RTC driver ✅
+- `src/drivers/ds1307.{c,h}`: DS1307 over the `hal/i2c` helpers (`i2c_read_reg` / `i2c_write_reg`). `ds1307_time_t` (sec/min/hour 24h, day/month/year-as-yy, weekday). API: `ds1307_present`, `ds1307_get_time`, `ds1307_set_time` (clears the CH bit ⇒ starts the oscillator, forces 24-hour mode, clamps day/month/weekday), `ds1307_init_or_seed` (boot helper, returns `1` = was halted+seeded / `0` = already running / `-1` = absent or I²C error).
+  - Internal BCD↔decimal helpers; `ds1307_get_time` reads regs 0x00–0x06 in one transaction and copes with 12-hour mode (bit6/AM-PM) just in case, though we only ever write 24h.
+  - `build_time()`: parses `__DATE__` ("Mmm dd yyyy", day space-padded) and `__TIME__` ("hh:mm:ss") at runtime into a `ds1307_time_t` (weekday set to 1 — not derivable). Used by `ds1307_init_or_seed` when CH is set.
+- `src/main.c`: calls `ds1307_init_or_seed()` after `sh1106_init()`; a 1 Hz `rtc_task` reads the clock and shows `20YY-MM-DD` (line 2) and `HH:MM:SS` (line 3) on the OLED (printed once immediately, then via the scheduler). Boot screen now: banner / rule / date / time / blank / "I2C dev: N" / addresses / ("RTC set from build" if it was seeded, or "RTC: not found" on line 2 if absent). `rtc_task` self-disables and shows "RTC: read error" if a later read fails. A local `put2()` zero-pads 2-digit fields.
+- `CMakeLists.txt`: added `src/drivers/ds1307.c`. README + CLAUDE.md updated.
+- **Validation:**
+  1. `cmake --build --preset default` compiles clean under `-Wall -Wextra`; `avr-size` grows ~0.3–0.5 KB flash.
+  2. *(hardware — DS1307 wired, addr 0x68, with crystal; battery recommended)* On power-up the boot screen shows the date on line 2 and a **clock ticking once per second** on line 3, and "I2C dev: 2" / "0x3C 0x68". With a fresh DS1307 (or no battery), line 7 reads "RTC set from build" and the clock starts from roughly the firmware's build time. After a power cycle *with* a good battery, the time should keep advancing (CH stays clear) and line 7 is absent.
+  3. *(hardware — DS1307 absent)* Line 2 reads "RTC: not found"; the OLED is still green and otherwise normal.
+  4. *(sanity)* The seconds field should roll 59 → 00 and bump minutes; the date should be plausible (≈ the build date) on a cold start.
 
 ## Key decisions
 
@@ -103,4 +116,4 @@ Running record of what's done and what's next. Updated at the end of every step.
 
 ## Next up
 
-**Step 6 — DS1307 RTC driver** (`drivers/ds1307.{c,h}`): BCD↔decimal conversion, `ds1307_get_time`/`ds1307_set_time` over the I²C HAL (register-pointer reads), and on boot — if the clock-halt (CH) bit is set — seed the clock from build-time `__DATE__`/`__TIME__`. `main.c` (a scheduled task) will show the time/date on the OLED. Starts after the Step 5 commit.
+**Step 7 — DHT11 temperature/humidity driver** (`drivers/dht11.{c,h}`): single-wire bit-bang read (start pulse → response → 40 data bits, timed with `_delay_us`), checksum-validated, with interrupts masked during the timing-critical section and a small retry policy. Honours the DHT11's ≥1 s minimum sampling interval. `main.c` (a scheduled task) will show `temp`/`humidity` on the OLED. Starts after the Step 6 commit.
