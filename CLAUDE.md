@@ -6,11 +6,11 @@ Notes for AI tooling working in this repo. Keep this current as the project evol
 
 **Heat Sentinel** — bare-metal firmware for an ATmega328P @ 8 MHz that monitors
 temperature/humidity (DHT11), timestamps via DS1307 RTC, displays on an SH1106
-OLED, drives a GPIO LED alert above a threshold, and uploads telemetry over an
-ESP-01 WiFi module (UART AT commands). The user owns all hardware design; this
-repo is firmware + project management only.
+OLED, raises an RGB-LED (HW-479 module) + buzzer alert above a threshold, and
+uploads telemetry over an ESP-01 WiFi module (UART AT commands). The user owns
+all hardware design; this repo is firmware + project management only.
 
-Work proceeds in **9 numbered steps** — see `PROJECT_LOG.md` for the roadmap,
+Work proceeds in **10 numbered steps** — see `PROJECT_LOG.md` for the roadmap,
 status, and the rationale behind key decisions. Each step ends with a git commit
 (message provided to the user, who commits manually). Update `PROJECT_LOG.md`
 **and** `README.md` as part of every step.
@@ -46,8 +46,8 @@ deliberately *not* part of the `flash` target — documented in `README.md`.
 - **Bare-metal superloop**, no RTOS. **Timer0** provides a `millis()` tick; a
   small **cooperative scheduler** (table of `{period, last_run, fn}`) runs each
   job at its own cadence without blocking the others.
-- Layering: `hal/` (gpio, timer, i2c, uart) → `drivers/` (sh1106, ds1307, dht11,
-  esp01) → `app/` (scheduler, state machine, thresholds, `main`).
+- Layering: `hal/` (gpio, timer, i2c, uart) → `drivers/` (led, buzzer, sh1106,
+  ds1307, dht11, esp01) → `app/` (scheduler, state machine, thresholds, `main`).
 - **I²C (hardware TWI):** shared by SH1106 + DS1307; blocking-with-timeout
   transactions (short, called from scheduled slots).
 - **USART (hardware):** dedicated to the ESP-01 — interrupt-driven RX ring
@@ -56,16 +56,23 @@ deliberately *not* part of the `flash` target — documented in `README.md`.
   at 8 MHz; module reconfigured via `AT+UART_DEF=9600,8,1,0,0`).
 - **DHT11:** single-wire bit-bang, checksum-validated, retried; interrupts masked
   during the timing-critical read.
-- **LED alert:** GPIO, blinks ~2 Hz while above `TEMP_ALERT_C` (default 30 °C).
+- **Alert (visual):** RGB LED module **HW-479** — three GPIOs, one per colour
+  (assumed common-cathode → active-high; `board.h` toggle to flip). Digital
+  on/off ⇒ 7 colours; e.g. green = normal, red blink ~2 Hz while above
+  `TEMP_ALERT_C` (default 30 °C). Hardware-PWM colour mixing is a possible later
+  extension.
+- **Alert (audible):** buzzer module on its own GPIO — short beep on entering the
+  alert state (optional periodic chirp while in alert). Active vs passive buzzer
+  handling per the hardware.
 - **RTC:** on boot, if the DS1307 clock-halt (CH) bit is set, seed from build
   time (`__DATE__`/`__TIME__`); `rtc_set_time()` available.
-- **Watchdog:** ~2 s, kicked from the loop (added in Step 9).
+- **Watchdog:** ~2 s, kicked from the loop (added in Step 10).
 
 ## Conventions
 
 - C only, `gnu11`. Lower_snake_case for functions/vars; `UPPER_SNAKE` macros;
-  module-prefixed names (`i2c_`, `sh1106_`, `ds1307_`, `dht11_`, `esp01_`,
-  `sched_`). One module = `.c` + `.h`.
+  module-prefixed names (`gpio_`, `timer_`, `i2c_`, `led_`, `buzzer_`, `sh1106_`,
+  `ds1307_`, `dht11_`, `esp01_`, `sched_`). One module = `.c` + `.h`.
 - **No monolithic `config.h`.** Pin map and clock-derived constants in `board.h`;
   per-driver tunables in the driver's header; secrets (WiFi SSID/pass, telemetry
   host/path) in an **untracked `app_config.h`** generated from a committed
@@ -74,24 +81,31 @@ deliberately *not* part of the `flash` target — documented in `README.md`.
   (no globbing).
 - Keep `README.md` (user-facing: setup/build/flash, current state) and
   `PROJECT_LOG.md` (step status + decisions) in sync with reality every step.
+- Each numbered step ends with a **Conventional Commits**-style message
+  (`feat:` / `fix:` / `docs:` / `refactor:` / `chore:` …) handed to the user,
+  plus a short **validation method** (build check + the on-hardware behaviour to
+  look for) recorded under that step in `PROJECT_LOG.md`.
 
 ## Current state
 
-Step 3 complete. In place:
-- `board.h` — pin map as `(LETTER, BIT)` pairs + `F_CPU` fallback.
+Step 4 complete. In place:
+- `board.h` — pin map as `(LETTER, BIT)` pairs + `F_CPU` fallback. DHT11 `PB0`; RGB LED `PB1/PB2/PB3` (`LED_RGB_ACTIVE_HIGH=1`, HW-479 common-cathode); buzzer `PD3`/OC2B (`BUZZER_ACTIVE_HIGH=1`); optional `ESP_RST_PIN` commented.
 - `hal/gpio.h` — zero-cost GPIO macros consuming a board.h pin pair.
 - `hal/timer.{c,h}` — Timer0 CTC → 1 ms `millis()` (atomic 32-bit read); needs `sei()` after `timer_init()`.
 - `hal/i2c.{c,h}` — TWI master, blocking with timeout; 7-bit addresses; primitives (`i2c_start/rep_start/stop/write/read_ack/read_nack`) + helpers (`i2c_probe`, `i2c_scan`, `i2c_write_reg`, `i2c_read_reg`). 100 kHz default (DS1307 limit); external SDA/SCL pull-ups are the user's hardware.
-- `drivers/led.{c,h}` — `led_init/on/off/toggle/set` on `LED_PIN`.
+- `drivers/led.{c,h}` — RGB LED (HW-479): `led_color_t` enum, `led_init/set/get/off/toggle(color)`; channel polarity from `LED_RGB_ACTIVE_HIGH`. Digital on/off per channel (8 states).
+- `drivers/buzzer.{c,h}` — `buzzer_init/on/off`, non-blocking `buzzer_beep(ms)` (active buzzer) and `buzzer_tone(freq_hz, ms)` (passive buzzer; Timer2 CTC toggling OC2B/PD3, used only while sounding), `buzzer_tick()` (call from loop), `buzzer_is_sounding()`. Polarity from `BUZZER_ACTIVE_HIGH`.
 - `app/scheduler.{c,h}` — fixed-table cooperative scheduler: `sched_add(period_ms, fn)` + `sched_tick()`, wraparound-safe.
-- `main.c` — superloop: inits, boot-time `i2c_scan()`, blink rate on the alert LED encodes whether any I²C device answered. Still a stand-in for the real app logic.
+- `main.c` — superloop: inits, boot-time `i2c_scan()`, boot chirp, RGB blink colour encodes whether any I²C device answered (green/red); calls `sched_tick()` + `buzzer_tick()`. Still a stand-in for the real app logic.
+
+Timer usage so far: **Timer0** = `millis()`; **Timer2** = buzzer tone (only while sounding); **Timer1** = free.
 
 Sources live under `src/` with `src/` on the include path; every new `.c` must be
 added to `add_executable(...)` in `CMakeLists.txt` (no globbing).
 
-Next: Step 4 — SH1106 128×64 OLED driver (`drivers/sh1106.{c,h}`): init + 2-px
+Next: Step 5 — SH1106 128×64 OLED driver (`drivers/sh1106.{c,h}`): init + 2-px
 column offset, page/column addressing, `clear`, `set_cursor`, 5×8 ASCII text;
-`main.c` shows the I²C scan result + banner on screen.
+`main.c` shows the I²C scan result (device list) + banner on screen.
 
 ## Reference: old code from another project
 

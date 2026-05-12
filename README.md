@@ -2,25 +2,27 @@
 
 Bare-metal firmware for an ATmega328P-based temperature & humidity monitor.
 It reads a DHT11, timestamps readings with a DS1307 RTC, shows status on an
-SH1106 OLED, raises a GPIO LED alert above a threshold, and pushes telemetry to
-the cloud over an ESP-01 WiFi module (UART AT commands).
+SH1106 OLED, raises an RGB-LED + buzzer alert above a threshold, and pushes
+telemetry to the cloud over an ESP-01 WiFi module (UART AT commands).
 
-> **Status:** Step 3 of 9 complete — build system, a 1 ms `millis()` tick, GPIO
-> helpers, an LED driver, a cooperative scheduler, and a blocking-with-timeout
-> I²C (TWI) master + bus scanner are in place. The app scans the I²C bus at boot
-> and reports the result on the alert LED (slow blink = ≥1 device, fast blink =
-> none). See [`PROJECT_LOG.md`](PROJECT_LOG.md) for the full roadmap and progress.
+> **Status:** Step 4 of 10 complete — build system, a 1 ms `millis()` tick, GPIO
+> helpers, a cooperative scheduler, a blocking-with-timeout I²C (TWI) master +
+> bus scanner, the RGB-LED (HW-479) driver, and a buzzer driver are in place. The
+> app scans the I²C bus at boot and reports the result on the RGB LED (green slow
+> blink = ≥1 device, red fast blink = none) plus a startup chirp. See
+> [`PROJECT_LOG.md`](PROJECT_LOG.md) for the full roadmap and progress.
 
 ## Hardware
 
-| Role            | Part        | Interface                          |
-|-----------------|-------------|------------------------------------|
-| MCU             | ATmega328P  | 8 MHz (`F_CPU = 8000000UL`)        |
-| Temp / Humidity | DHT11       | single-wire GPIO                   |
-| Display         | SH1106 OLED | I²C (TWI), 128×64                   |
-| Real-time clock | DS1307      | I²C (TWI)                          |
-| WiFi            | ESP-01      | USART, AT commands @ 9600 baud     |
-| Alert           | LED         | GPIO                               |
+| Role             | Part                  | Interface                       |
+|------------------|-----------------------|---------------------------------|
+| MCU              | ATmega328P            | 8 MHz (`F_CPU = 8000000UL`)     |
+| Temp / Humidity  | DHT11                 | single-wire GPIO                |
+| Display          | SH1106 OLED           | I²C (TWI), 128×64               |
+| Real-time clock  | DS1307                | I²C (TWI)                       |
+| WiFi             | ESP-01                | USART, AT commands @ 9600 baud  |
+| Alert (visual)   | RGB LED module HW-479 | 3× GPIO (one pin per colour)    |
+| Alert (audible)  | Buzzer module         | GPIO                            |
 
 Wiring, level shifting and circuit design are handled outside this repo; the
 firmware treats the pin map as configuration (see `board.h`, added in Step 2).
@@ -40,7 +42,8 @@ heat-sentinel/
 │  │  ├─ timer.{c,h}               # Timer0 -> 1 ms millis() tick
 │  │  └─ i2c.{c,h}                 # TWI master (blocking + timeout) + bus scanner
 │  ├─ drivers/
-│  │  └─ led.{c,h}                 # alert LED on LED_PIN
+│  │  ├─ led.{c,h}                 # RGB LED (HW-479) on LED_R/G/B_PIN — named colours
+│  │  └─ buzzer.{c,h}              # buzzer: on/off + beep(ms); tone(freq,ms) via Timer2/OC2B
 │  └─ app/
 │     └─ scheduler.{c,h}           # cooperative {period, last_run, fn} scheduler
 ├─ README.md                       # this file (kept up to date each step)
@@ -148,15 +151,22 @@ the `flash` target on purpose.)
 
 ## Notes / current limitations
 
-- The application logic is still a stand-in: `main.c` scans the I²C bus once at
-  boot and then blinks the alert LED — slow (~1 Hz) if any device ACKed, fast
-  (~3 Hz) if none did. Real behaviour (OLED, RTC timestamp, sensor read,
-  threshold alert, WiFi upload) lands in Steps 4–8.
+- The application logic is still a stand-in: `main.c` chirps the buzzer, scans
+  the I²C bus once at boot, then blinks the RGB LED — **green ~1 Hz** if any
+  device ACKed, **red ~3 Hz** if none did. The threshold-driven alert (and OLED,
+  RTC timestamp, sensor read, WiFi upload) lands in Steps 5–9.
+- RGB LED is digital on/off per channel (8 states: off + 7 colours); polarity is
+  `LED_RGB_ACTIVE_HIGH` in `board.h` (HW-479 is common-cathode → `1`). PWM colour
+  mixing is a possible later extension.
+- Buzzer: `BUZZER_PIN` (default `PD3` / OC2B). `BUZZER_ACTIVE_HIGH` toggles
+  polarity — **many MH-FMD-style boards are active-low**, so set it to `0` if the
+  buzzer is on at rest. For a passive buzzer the tone comes from Timer2 driving
+  OC2B; Timer2 is only used while a tone is sounding.
 - I²C runs at 100 kHz (the DS1307's maximum); SDA/SCL **external pull-ups are
   part of your hardware** — the firmware does not enable the AVR's internal ones.
-- No SH1106 / DS1307 / DHT11 / ESP-01 drivers yet; they arrive in Steps 4–7.
+- No SH1106 / DS1307 / DHT11 / ESP-01 drivers yet; they arrive in Steps 5–8.
 - WiFi credentials and the telemetry endpoint will live in an untracked
-  `app_config.h` generated from a committed `app_config.h.example` (Step 9).
+  `app_config.h` generated from a committed `app_config.h.example` (Step 10).
 
 ## License
 
