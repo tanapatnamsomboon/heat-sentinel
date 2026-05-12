@@ -2,22 +2,23 @@
 #include "board.h"
 #include "hal/gpio.h"
 
+/* Pin level that drives a channel ON / OFF, per the module's polarity.
+ * (We go through gpio_write(pin, level) rather than gpio_high/gpio_low so the
+ * (LETTER, BIT) pin macro from board.h expands correctly through one wrapper.) */
 #if LED_RGB_ACTIVE_HIGH
-#  define LED_CH_ON_(pin)   gpio_high(pin)
-#  define LED_CH_OFF_(pin)  gpio_low(pin)
+#  define LED_LEVEL_(on)  ((on) ? 1 : 0)
 #else
-#  define LED_CH_ON_(pin)   gpio_low(pin)
-#  define LED_CH_OFF_(pin)  gpio_high(pin)
+#  define LED_LEVEL_(on)  ((on) ? 0 : 1)
 #endif
 
 static led_color_t s_color = LED_OFF;
 
 void led_init(void)
 {
-    /* park the channels at the inactive level before enabling outputs */
-    LED_CH_OFF_(LED_R_PIN);
-    LED_CH_OFF_(LED_G_PIN);
-    LED_CH_OFF_(LED_B_PIN);
+    /* park the channels OFF before enabling their output drivers */
+    gpio_write(LED_R_PIN, LED_LEVEL_(0));
+    gpio_write(LED_G_PIN, LED_LEVEL_(0));
+    gpio_write(LED_B_PIN, LED_LEVEL_(0));
     gpio_output(LED_R_PIN);
     gpio_output(LED_G_PIN);
     gpio_output(LED_B_PIN);
@@ -26,9 +27,9 @@ void led_init(void)
 
 void led_set(led_color_t color)
 {
-    if (color & LED_RED)   { LED_CH_ON_(LED_R_PIN); } else { LED_CH_OFF_(LED_R_PIN); }
-    if (color & LED_GREEN) { LED_CH_ON_(LED_G_PIN); } else { LED_CH_OFF_(LED_G_PIN); }
-    if (color & LED_BLUE)  { LED_CH_ON_(LED_B_PIN); } else { LED_CH_OFF_(LED_B_PIN); }
+    gpio_write(LED_R_PIN, LED_LEVEL_(color & LED_RED));
+    gpio_write(LED_G_PIN, LED_LEVEL_(color & LED_GREEN));
+    gpio_write(LED_B_PIN, LED_LEVEL_(color & LED_BLUE));
     s_color = color;
 }
 

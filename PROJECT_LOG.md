@@ -69,6 +69,7 @@ Running record of what's done and what's next. Updated at the end of every step.
   1. `cmake --build --preset default` compiles clean under `-Wall -Wextra`; `avr-size` grows a few hundred bytes.
   2. *(hardware — LED)* Power up: a single colour should blink. With ≥1 I²C device wired (+ pull-ups) → **green**, slow (~1 Hz). With nothing on the bus → **red**, fast (~3 Hz). If the colour is wrong-but-consistent (e.g. you get cyan where you expected green) the `LED_R/G/B_PIN` order in `board.h` doesn't match your wiring; if a colour is inverted/always-on, flip `LED_RGB_ACTIVE_HIGH`.
   3. *(hardware — buzzer)* You should hear a short ~120 ms chirp once at power-up. Silent or just a faint click on a beep → it's a passive buzzer (the chirp already uses the tone path, so it should chirp); if the buzzer is **continuously on** at rest → set `BUZZER_ACTIVE_HIGH = 0` in `board.h`. To sanity-check the tone path, scope PD3 during the chirp → ~2.3 kHz square wave.
+- **Build fix (post-Step-4):** first build failed — `led.c` used parameterized wrapper macros (`LED_CH_ON_(pin)`/`LED_CH_OFF_(pin)`) routing through the 1-arg `gpio_high`/`gpio_low`, so the `(LETTER, BIT)` pin pair got pre-expanded into two args before reaching them (`error: macro 'gpio_low' passed 2 arguments, but takes just 1`). Rewrote `led.c` to set channels via the public `gpio_write(pin, level)` macro (3-arg internal target → pin pair expands correctly). Committed as `fix: led.c — drive RGB channels via gpio_write() so the (LETTER,BIT) pin pair expands correctly`.
 
 ## Key decisions
 
