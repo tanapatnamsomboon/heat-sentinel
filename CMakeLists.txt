@@ -28,9 +28,14 @@ set(FW_TARGET heat_sentinel)
 
 add_executable(${FW_TARGET}
     src/main.c
+    src/hal/timer.c
+    src/drivers/led.c
+    src/app/scheduler.c
 )
 
 set_target_properties(${FW_TARGET} PROPERTIES SUFFIX ".elf")
+
+target_include_directories(${FW_TARGET} PRIVATE src)
 
 target_compile_definitions(${FW_TARGET} PRIVATE F_CPU=${F_CPU})
 

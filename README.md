@@ -5,9 +5,10 @@ It reads a DHT11, timestamps readings with a DS1307 RTC, shows status on an
 SH1106 OLED, raises a GPIO LED alert above a threshold, and pushes telemetry to
 the cloud over an ESP-01 WiFi module (UART AT commands).
 
-> **Status:** Step 1 of 9 complete — toolchain, CMake build, and `flash` target
-> are in place with a placeholder blinky. See [`PROJECT_LOG.md`](PROJECT_LOG.md)
-> for the full roadmap and progress.
+> **Status:** Step 2 of 9 complete — build system, a 1 ms `millis()` tick, GPIO
+> helpers, an LED driver, and a small cooperative scheduler are in place; the
+> application currently just blinks a ~1 Hz heartbeat LED through the scheduler.
+> See [`PROJECT_LOG.md`](PROJECT_LOG.md) for the full roadmap and progress.
 
 ## Hardware
 
@@ -30,7 +31,16 @@ heat-sentinel/
 ├─ CMakeLists.txt                  # build configuration
 ├─ CMakePresets.json               # "default" preset: Ninja + AVR toolchain
 ├─ cmake/avr-gcc-toolchain.cmake   # avr-gcc cross-compile toolchain file
-├─ src/                            # firmware sources (currently: main.c blinky)
+├─ src/
+│  ├─ board.h                      # pin map + F_CPU (the only place pins live)
+│  ├─ main.c                       # superloop: init + register scheduled jobs
+│  ├─ hal/                         # hardware layer
+│  │  ├─ gpio.h                    # zero-cost GPIO macros, pins as (LETTER, BIT)
+│  │  └─ timer.{c,h}               # Timer0 -> 1 ms millis() tick
+│  ├─ drivers/
+│  │  └─ led.{c,h}                 # alert LED on LED_PIN
+│  └─ app/
+│     └─ scheduler.{c,h}           # cooperative {period, last_run, fn} scheduler
 ├─ README.md                       # this file (kept up to date each step)
 ├─ PROJECT_LOG.md                  # step-by-step progress log
 ├─ CLAUDE.md                       # build/architecture notes for tooling
@@ -136,8 +146,11 @@ the `flash` target on purpose.)
 
 ## Notes / current limitations
 
-- `src/main.c` is a temporary blinky on `PB1` for toolchain verification only.
-- No peripheral drivers yet; they arrive in Steps 3–7 (I²C, OLED, RTC, DHT11, ESP-01).
+- The application logic is still a stand-in: `main.c` only blinks the alert LED
+  at ~1 Hz to exercise the `millis()` tick and the scheduler. Real behaviour
+  (sensor read, OLED, RTC timestamp, threshold alert, WiFi upload) lands in
+  Steps 4–8.
+- No I²C / OLED / RTC / DHT11 / ESP-01 drivers yet; they arrive in Steps 3–7.
 - WiFi credentials and the telemetry endpoint will live in an untracked
   `app_config.h` generated from a committed `app_config.h.example` (Step 9).
 

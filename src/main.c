@@ -1,33 +1,34 @@
 /*
- * Heat Sentinel - bare-metal firmware for the ATmega328P @ 8 MHz.
+ * Heat Sentinel - ATmega328P @ 8 MHz.
  *
- * Step 1 (toolchain bring-up): this is a placeholder "blinky" that toggles the
- * pin earmarked for the alert LED (PB1). Its only job is to prove that the
- * CMake + avr-gcc build and the `flash` target work on both Windows and macOS.
- * It will be replaced by the real application in later steps.
+ * Step 2: core infrastructure online. main() brings up the 1 ms millis() tick,
+ * the LED driver and the cooperative scheduler, then registers one job that
+ * blinks the alert LED at ~1 Hz as a liveness heartbeat. Sensor reads, the OLED,
+ * the RTC, WiFi telemetry and the real threshold-driven alert are layered on in
+ * the steps that follow.
  */
 
-#ifndef F_CPU
-/* Mirrors the -DF_CPU value injected by CMake; keeps IDEs/linters happy. */
-#define F_CPU 8000000UL
-#endif
+#include "hal/timer.h"
+#include "drivers/led.h"
+#include "app/scheduler.h"
 
-#include <avr/io.h>
-#include <util/delay.h>
+#include <avr/interrupt.h>
 
-/* Provisional pin map - hardware wiring is owned by the user; see board.h later. */
-#define LED_DDR  DDRB
-#define LED_PORT PORTB
-#define LED_BIT  PB1
+static void heartbeat_task(void)
+{
+    led_toggle();
+}
 
 int main(void)
 {
-    LED_DDR |= (1 << LED_BIT); /* alert LED pin -> output */
+    led_init();
+    timer_init();
+    sei();                          /* millis() needs interrupts running */
+
+    sched_add(500, heartbeat_task); /* toggle every 500 ms -> ~1 Hz blink */
 
     for (;;) {
-        LED_PORT ^= (1 << LED_BIT);
-        _delay_ms(500);
+        sched_tick();
+        /* further scheduled jobs (sensor, display, RTC, WiFi) join here later */
     }
-
-    return 0; /* not reached */
 }

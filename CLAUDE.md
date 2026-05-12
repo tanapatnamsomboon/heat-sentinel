@@ -77,9 +77,17 @@ deliberately *not* part of the `flash` target — documented in `README.md`.
 
 ## Current state
 
-Step 1 complete (build skeleton + blinky placeholder on `PB1`). Next: Step 2 —
-`board.h`, Timer0 `millis()`, GPIO helpers, LED driver, cooperative scheduler.
-The blinky `main.c` is throwaway and will be replaced.
+Step 2 complete. In place: `board.h` (pin map as `(LETTER, BIT)` pairs + `F_CPU`),
+`hal/gpio.h` (zero-cost GPIO macros), `hal/timer.{c,h}` (Timer0 CTC → 1 ms
+`millis()`, atomic read; needs `sei()` after `timer_init()`), `drivers/led.{c,h}`,
+`app/scheduler.{c,h}` (fixed-table cooperative scheduler: `sched_add(period, fn)`
++ `sched_tick()`, wraparound-safe). `main.c` is a superloop that registers a
+1 Hz heartbeat-LED task — still a stand-in for the real app logic. Sources live
+under `src/` with `src/` on the include path; new `.c` files go in
+`add_executable(...)` in `CMakeLists.txt`.
+
+Next: Step 3 — I²C (TWI) master HAL (`hal/i2c.{c,h}`, blocking-with-timeout) +
+a small bus scanner for bench bring-up.
 
 ## Reference: old code from another project
 
