@@ -5,7 +5,7 @@ It reads a DHT11, timestamps readings with a DS1307 RTC, shows status on an
 SH1106 OLED, raises an RGB-LED + buzzer alert above a threshold, and pushes
 telemetry to the cloud over an ESP-01 WiFi module (UART AT commands).
 
-> **Status:** Step 8b of 10 complete — added non-blocking ESP-01 AT state machine and WiFi upload. See
+> **Status:** Step 8c of 11 complete — added non-blocking ESP-01 AT state machine, WiFi upload, and TMP35 analog sensor. **(Note: The ESP-01 hardware is currently omitted, the firmware handles its absence gracefully).** Added MCP3201 SPI ADC to the roadmap. See
 > [`PROJECT_LOG.md`](PROJECT_LOG.md) for the full roadmap and progress.
 
 ## Hardware
@@ -20,6 +20,7 @@ telemetry to the cloud over an ESP-01 WiFi module (UART AT commands).
 | WiFi            | ESP-01                | USART, AT commands @ 9600 baud |
 | Alert (visual)  | RGB LED module HW-479 | 3× GPIO (one pin per colour)   |
 | Alert (audible) | Buzzer module         | GPIO                           |
+| ADC (12-bit)    | MCP3201               | SPI                            |
 
 Wiring, level shifting and circuit design are handled outside this repo; the
 firmware treats the pin map as configuration. All assignments live in one place,
@@ -27,18 +28,20 @@ firmware treats the pin map as configuration. All assignments live in one place,
 
 ### Pin map (defaults in `board.h`)
 
-| Signal                          | ATmega328P pin                | Goes to                                        | Notes                                                                                                |
-|---------------------------------|-------------------------------|------------------------------------------------|------------------------------------------------------------------------------------------------------|
-| RGB LED — R / G / B             | **PB0 / PB1 / PB2**           | HW-479 `R` / `G` / `B`                         | common cathode → HW-479 `−` to GND; series resistors are on the module                               |
-| DHT11 data                      | **PC0**                       | DHT11 `DATA`/`OUT`                             | needs an external pull-up on the line (it's on the usual DHT11 breakout)                             |
-| TMP35 VOUT                      | **PC1**                       | TMP35 VOUT                                     | Analog input (ADC1); formula assumes 5V system                                                       |
-| Buzzer signal                   | **PD3**                       | MH-FMD `S`/`I/O`                               | = OC2B, so Timer2 can tone-drive a passive buzzer; if it's on at rest, set `BUZZER_ACTIVE_HIGH = 0`  |
-| I²C SDA / SCL                   | **PC4 / PC5** (fixed)         | SH1106 `SDA`/`SCL` **and** DS1307 `SDA`/`SCL`  | shared bus — wire SDAs together, SCLs together; one ~4.7 kΩ pull-up pair to VCC                      |
-| UART TXD → ESP-01 RX            | **PD1** (fixed)               | ESP-01 `RX` (`U0RXD`)                          | **MCU TX → ESP RX** — the ESP-01's RX/TX cross over                                                  |
-| UART RXD ← ESP-01 TX            | **PD0** (fixed)               | ESP-01 `TX` (`U0TXD`)                          | **MCU RX → ESP TX**                                                                                  |
-| ESP-01 reset (optional)         | PD4                           | ESP-01 `RST`                                   | only if you uncomment `ESP_RST_PIN`; otherwise tie ESP `RST` + `CH_PD` to 3.3 V                      |
-| ISP — MOSI / MISO / SCK / RESET | PB3 / PB4 / PB5 / PC6 (RESET) | your programmer                                | **reserved for the loader** — don't reuse PB3/PB4/PB5                                                |
-| XTAL1 / XTAL2                   | PB6 / PB7                     | 8 MHz crystal, *if used*                       | free GPIO only when running the internal 8 MHz RC                                                    |
+| Signal                          | ATmega328P pin                | Goes to                                          | Notes                                                                                                  |
+|---------------------------------|-------------------------------|--------------------------------------------------|--------------------------------------------------------------------------------------------------------|
+| RGB LED — R / G / B             | **PB0 / PB1 / PB2**           | HW-479 `R` / `G` / `B`                           | common cathode → HW-479 `−` to GND; series resistors are on the module                                 |
+| DHT11 data                      | **PC0**                       | DHT11 `DATA`/`OUT`                               | needs an external pull-up on the line (it's on the usual DHT11 breakout)                               |
+| TMP35 VOUT                      | **PC1**                       | TMP35 VOUT                                       | Analog input (ADC1); formula assumes 5V system                                                         |
+| Buzzer signal                   | **PD3**                       | MH-FMD `S`/`I/O`                                 | = OC2B, so Timer2 can tone-drive a passive buzzer; if it's on at rest, set `BUZZER_ACTIVE_HIGH = 0`    |
+| I²C SDA / SCL                   | **PC4 / PC5** (fixed)         | SH1106 `SDA`/`SCL` **and** DS1307 `SDA`/`SCL`    | shared bus — wire SDAs together, SCLs together; one ~4.7 kΩ pull-up pair to VCC                        |
+| UART TXD → ESP-01 RX            | **PD1** (fixed)               | ESP-01 `RX` (`U0RXD`)                            | **MCU TX → ESP RX** — the ESP-01's RX/TX cross over                                                    |
+| UART RXD ← ESP-01 TX            | **PD0** (fixed)               | ESP-01 `TX` (`U0TXD`)                            | **MCU RX → ESP TX**                                                                                    |
+| ESP-01 reset (optional)         | PD4                           | ESP-01 `RST`                                     | only if you uncomment `ESP_RST_PIN`; otherwise tie ESP `RST` + `CH_PD` to 3.3 V                        |
+| ISP — MOSI / MISO / SCK / RESET | PB3 / PB4 / PB5 / PC6 (RESET) | your programmer                                  | **reserved for the loader** — don't reuse PB3/PB4/PB5                                                  |
+| XTAL1 / XTAL2                   | PB6 / PB7                     | 8 MHz crystal, *if used*                         | free GPIO only when running the internal 8 MHz RC                                                      |
+| MCP3201 CS                      | **PC2** (Provisional)         | MCP3201 `CS`                                     | Chip Select for SPI ADC                                                                                |
+| MCP3201 SPI Data/Clock          | **PB4 / PB5**                 | MCP3201 `Dout` / `CLK`                           | Shares pins with ISP (`MISO`, `SCK`). Do not assert CS during flashing.                                |
 
 Only the ESP-01 uses the UART; the OLED + RTC share the I²C bus; the DHT11, the
 three RGB-LED channels and the buzzer are plain GPIO. The ESP-01 is a 3.3 V part
@@ -196,10 +199,10 @@ the `flash` target on purpose.)
 - Buzzer: `BUZZER_PIN` (default `PD3` / OC2B). `BUZZER_ACTIVE_HIGH` toggles
   polarity — **many MH-FMD-style boards are active-low**, so set it to `0` if the
   buzzer is on at rest. For a passive buzzer the tone comes from Timer2 driving
-  OC2B; Timer2 is only used while a tone is sounding.
-- DHT11: single-wire bit-bang read on `DHT11_PIN` (default `PB0`), checksum-
-  validated, ≥1 s between reads (the driver enforces `DHT11_MIN_INTERVAL_MS`,
-  2 s). Interrupts are masked for the ~5 ms of bit timing — `millis()` loses a
+  OC2B; Timer2 is only used while a tone sounds.
+- DHT11: single-wire bit-bang read on `DHT11_PIN` (default `PB0`), checksum-validated, 
+  ≥1 s between reads (the driver enforces `DHT11_MIN_INTERVAL_MS`, 2 s). 
+  Interrupts are masked for the ~5 ms of bit timing — `millis()` loses a
   few ms per read (immaterial; the DS1307 is the authoritative clock). The data
   line's pull-up is part of your hardware (it's on the usual DHT11 breakout).
 - UART: USART0 (RXD=PD0, TXD=PD1) at **9600 baud** — your ESP-01 must be set to
@@ -209,9 +212,16 @@ the `flash` target on purpose.)
 - I²C runs at 100 kHz (the DS1307's maximum); SDA/SCL **external pull-ups are
   part of your hardware** — the firmware does not enable the AVR's internal ones.
 - No ESP-01 AT layer yet; it arrives in Step 8b (along with the untracked
-  `app_config.h` for WiFi credentials + telemetry endpoint).
-- WiFi credentials and the telemetry endpoint will live in an untracked
+  `app_config.h` for Wi-Fi credentials + telemetry endpoint).
+- Wi-Fi credentials and the telemetry endpoint will live in an untracked
   `app_config.h` generated from a committed `app_config.h.example` (Step 10).
+- **ESP-01 Hardware Absent:** The ESP-01 driver (Step 8b) is active in the code, 
+  but the hardware module is currently omitted from the physical setup. 
+  It is normal to see OLED line 7 cycle through `ESP: Init`, `ESP: Wait Ready`, 
+  and `ESP: Error/Backoff` as the non-blocking timeouts trigger.
+- **MCP3201 Roadmap:** Support for the MCP3201 12-bit ADC via SPI is planned (Step 8d). 
+  It will share the AVR's hardware SPI pins (`PB4`/`PB5`), which are also used by the ISP programmer. 
+  A dedicated GPIO (e.g., `PC2`) will be used for Chip Select (`CS`).
 
 ## License
 

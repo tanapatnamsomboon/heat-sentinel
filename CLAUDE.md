@@ -88,27 +88,21 @@ deliberately *not* part of the `flash` target — documented in `README.md`.
 
 ## Current state
 
-Step 8a complete. In place:
-- `board.h` — pin map as `(LETTER, BIT)` pairs + `F_CPU` fallback (full pin-map header comment). RGB LED `PB0/PB1/PB2` (`LED_RGB_ACTIVE_HIGH=1`, HW-479 common-cathode); DHT11 `PC0`; buzzer `PD3`/OC2B (`BUZZER_ACTIVE_HIGH=1`); I²C `PC4/PC5` (OLED+RTC); UART `PD0` RXD↔ESP TX / `PD1` TXD↔ESP RX; `PB3/PB4/PB5`(+`PC6`/RESET) reserved for the ISP loader; optional `ESP_RST_PIN`→`PD4` commented. (Pins are freely changeable here; the drivers are pin-agnostic.)
-- `hal/gpio.h` — zero-cost GPIO macros consuming a board.h pin pair.
-- `hal/timer.{c,h}` — Timer0 CTC → 1 ms `millis()` (atomic 32-bit read); needs `sei()` after `timer_init()`.
-- `hal/i2c.{c,h}` — TWI master, blocking with timeout; 7-bit addresses; primitives (`i2c_start/rep_start/stop/write/read_ack/read_nack`) + helpers (`i2c_probe`, `i2c_scan`, `i2c_write_reg`, `i2c_read_reg`). 100 kHz default (DS1307 limit); external SDA/SCL pull-ups are the user's hardware.
-- `hal/uart.{c,h}` — USART0 8-N-1; `uart_init(baud)` (UBRR from F_CPU; 9600 for the ESP-01), interrupt-driven RX ring buffer (`UART_RX_BUF_SIZE`, default 64), blocking TX (`uart_putc/puts/puts_p/write`), `uart_available/getc/flush_rx`. RXD=PD0, TXD=PD1 (fixed). Single-producer/consumer ring (no locks needed).
-- `drivers/led.{c,h}` — RGB LED (HW-479): `led_color_t` enum, `led_init/set/get/off/toggle(color)`; channel polarity from `LED_RGB_ACTIVE_HIGH`. Digital on/off per channel (8 states).
-- `drivers/buzzer.{c,h}` — `buzzer_init/on/off`, non-blocking `buzzer_beep(ms)` (active buzzer) and `buzzer_tone(freq_hz, ms)` (passive buzzer; Timer2 CTC toggling OC2B/PD3, used only while sounding), `buzzer_tick()` (call from loop), `buzzer_is_sounding()`. Polarity from `BUZZER_ACTIVE_HIGH`.
-- `drivers/sh1106.{c,h}` — SH1106 128×64 OLED over `hal/i2c`, **framebuffer-less** (text written straight to the panel). `sh1106_init()` (probes `SH1106_I2C_ADDR`=`0x3C`, runs init seq, clears — returns `false` if absent), `sh1106_clear/clear_line/set_cursor` (cursor `(x:0..127, page:0..7)`, 2-px `SH1106_COL_OFFSET` applied internally), `sh1106_putc/puts/put_uint/put_hex8/print_line` (5×8 PROGMEM font, 6-px cell ⇒ 21 chars/line, `'\n'` + wrap), `sh1106_set_inverted/set_on`. `SH1106_FLIP_180` toggles orientation.
-- `drivers/ds1307.{c,h}` — DS1307 RTC over `hal/i2c` helpers. `ds1307_time_t` (sec/min/hour 24h, day/month/year-as-yy, weekday). `ds1307_present`, `ds1307_get_time`/`ds1307_set_time` (set clears CH ⇒ starts oscillator, 24h mode, clamps day/month/weekday), `ds1307_init_or_seed()` (boot: if CH set, seed from `__DATE__`/`__TIME__`; returns 1/0/-1). BCD↔dec internal.
-- `drivers/dht11.{c,h}` — DHT11 on `DHT11_PIN` (PB0). `dht11_status_t`, `dht11_reading_t { humidity, temperature }` (8-bit). `dht11_init()`, `dht11_read(out)` — enforces `DHT11_MIN_INTERVAL_MS` (2 s) returning `DHT11_BUSY`; 20 ms start pulse (IRQs on) then `ATOMIC_BLOCK` (IRQs off, ~5 ms) for the response + 40 bits; checksum-validated; phase waits bounded by `DHT11_PHASE_LOOPS`. Single attempt per call — the scheduler re-reads every 2 s.
-- `app/scheduler.{c,h}` — fixed-table cooperative scheduler: `sched_add(period_ms, fn)` + `sched_tick()`, wraparound-safe.
-- `main.c` — superloop: inits (incl. `uart_init(9600)`), boot-time `i2c_scan()`, `sh1106_init()`, `ds1307_init_or_seed()`, `dht11_init()`; `uart_probe_and_show()` pings the ESP-01 with "AT" and shows the result on OLED line 7; boot chirp; a 1 Hz `rtc_task` (date/time) + 2 s `dht_task` (temp/humidity). RGB colour mirrors OLED status (green/yellow/red); calls `sched_tick()` + `buzzer_tick()`. Still a stand-in for the real app logic.
-- `drivers/esp01.{c,h}` — ESP-01 AT state machine. `esp01_init/tick/post/get_state_str`. Handled entirely asynchronously using `millis()` timeouts.
+## Current state
+
+Step 8c complete. In place:
+- `board.h` — pin map updated. RGB LED `PB0/PB1/PB2`, DHT11 `PC0`, TMP35 `PC1` (ADC1), buzzer `PD3`/OC2B, I²C `PC4/PC5`.
+- `hal/adc.{c,h}` — 10-bit ADC driver using AVCC (5V).
+- `drivers/esp01.{c,h}` — Non-blocking AT state machine for ESP-01. **Note:** Hardware is currently NOT connected. The state machine will naturally hit timeouts and cycle through `ESP_STATE_INIT` / `ESP_STATE_ERROR_BACKOFF` without blocking the superloop.
+- `drivers/tmp35.{c,h}` — TMP35 analog temperature sensor driver returning °C * 10.
+- MCP3201 (12-bit SPI ADC) is planned for the next step (Step 8d) using hardware SPI. It will share the ISP pins (PB4/MISO, PB5/SCK) with a dedicated CS pin (e.g., PC2).
 
 Timer usage so far: **Timer0** = `millis()`; **Timer2** = buzzer tone (only while sounding); **Timer1** = free.
 
 Sources live under `src/` with `src/` on the include path; every new `.c` must be
 added to `add_executable(...)` in `CMakeLists.txt` (no globbing).
 
-Next: Step 9 — Application integration: threshold check -> RGB-LED + buzzer alert, graceful degradation.
+Next: Step 8d — MCP3201 12-bit ADC integration via hardware SPI.
 
 ## Reference: old code from another project
 
