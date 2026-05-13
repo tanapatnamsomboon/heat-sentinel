@@ -17,6 +17,7 @@
 #include "drivers/dht11.h"
 #include "drivers/tmp35.h"
 #include "drivers/esp01.h"
+#include "drivers/mcp3201.h"
 #include "app/scheduler.h"
 
 #include <avr/interrupt.h>
@@ -105,6 +106,10 @@ static void tmp35_task(void)
         sh1106_putc('.');
         sh1106_put_uint(t_x10 % 10u);
         sh1106_puts(" C");
+
+        sh1106_clear_line(6);
+        sh1106_puts("MCP Raw: ");
+        sh1106_put_uint(mcp3201_read());
     }
 }
 

@@ -61,4 +61,9 @@
  * Connected to PC1 (ADC1). Formula assumes 5V AVCC reference. */
 #define TMP35_ADC_CH     1       /* PC1 = ADC Channel 1 */
 
+/* --- MCP3201 12-bit SPI ADC ---
+ * Uses Hardware SPI: PB4 (MISO) and PB5 (SCK). These pins are shared with the ISP.
+ * The Chip Select (CS) pin is assigned to PC2. */
+#define MCP3201_CS_PIN   C, 2    /* PC2 */
+
 #endif /* BOARD_H */
