@@ -30,6 +30,7 @@ add_executable(${FW_TARGET}
     src/main.c
     src/hal/timer.c
     src/hal/i2c.c
+    src/hal/uart.c
     src/drivers/led.c
     src/drivers/buzzer.c
     src/drivers/sh1106.c

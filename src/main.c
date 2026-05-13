@@ -1,14 +1,16 @@
 /*
  * Heat Sentinel - ATmega328P @ 8 MHz.
  *
- * Step 7: the DHT11 driver is online. A 2 s scheduled task now reads temperature
- * and humidity and shows them on the OLED, alongside the 1 Hz RTC clock and the
- * boot-time I2C scan. The threshold-driven RGB/buzzer alert and the WiFi upload
- * arrive in Steps 8-9. RGB LED still mirrors OLED status (green/yellow/red).
+ * Step 8a: the USART (UART) driver is online. At boot, after bringing up the
+ * OLED / RTC / DHT11, the firmware pings the ESP-01 with "AT" over the UART
+ * @ 9600 baud and shows the result on the OLED. The 1 Hz clock and the 2 s
+ * temp/humidity readout keep running. The ESP-01 AT state machine + WiFi
+ * upload arrive in Step 8b.
  */
 
 #include "hal/i2c.h"
 #include "hal/timer.h"
+#include "hal/uart.h"
 #include "drivers/led.h"
 #include "drivers/buzzer.h"
 #include "drivers/sh1106.h"
@@ -17,6 +19,9 @@
 #include "app/scheduler.h"
 
 #include <avr/interrupt.h>
+#include <util/delay.h>
+
+#define ESP_UART_BAUD  9600UL    /* the ESP-01 must be set to this (AT+UART_DEF=9600,8,1,0,0) */
 
 static bool        s_oled_ok;
 static bool        s_rtc_ok;
@@ -92,6 +97,49 @@ static void dht_task(void)
     }
 }
 
+/* Boot-time UART/ESP-01 probe: send "AT", look for an "OK" reply, and show the
+ * outcome on line 7. (Bring-up only - replaced by the ESP-01 state machine in
+ * Step 8b.) */
+static void uart_probe_and_show(void)
+{
+    _delay_ms(500);                 /* let the ESP-01 finish booting */
+
+    bool    esp_ok = false;
+    char    head[14];               /* first few printable RX bytes, for the OLED */
+    uint8_t hn = 0;
+
+    for (uint8_t attempt = 0; attempt < 3 && !esp_ok; attempt++) {
+        uart_flush_rx();
+        uart_puts("AT\r\n");
+        _delay_ms(150);
+        uint8_t prev = 0;
+        int ch;
+        while ((ch = uart_getc()) >= 0) {
+            uint8_t b = (uint8_t)ch;
+            if (b == (uint8_t)'K' && prev == (uint8_t)'O') {
+                esp_ok = true;
+            }
+            prev = b;
+            if (hn < 13 && b >= 0x20 && b < 0x7F) {
+                head[hn++] = (char)b;
+            }
+        }
+    }
+    head[hn] = '\0';
+
+    if (s_oled_ok) {
+        sh1106_clear_line(7);
+        if (esp_ok) {
+            sh1106_puts("ESP-01: ready");
+        } else if (hn > 0) {
+            sh1106_puts("UART rx: ");
+            sh1106_puts(head);
+        } else {
+            sh1106_puts("UART: no reply");
+        }
+    }
+}
+
 int main(void)
 {
     led_init();
@@ -99,7 +147,8 @@ int main(void)
     timer_init();
     i2c_init();
     dht11_init();
-    sei();                          /* millis() needs interrupts running */
+    uart_init(ESP_UART_BAUD);
+    sei();                          /* millis() + UART RX need interrupts running */
 
     uint8_t found[8];
     uint8_t n = i2c_scan(found, (uint8_t)sizeof found);
@@ -108,7 +157,6 @@ int main(void)
     s_rtc_ok = (rtc_rc >= 0);
 
     s_blink_color = s_oled_ok ? LED_GREEN : (n > 0 ? LED_YELLOW : LED_RED);
-    buzzer_tone(2300, 120);         /* boot chirp (works for a passive buzzer) */
 
     if (s_oled_ok) {
         sh1106_print_line(0, "Heat Sentinel");
@@ -119,15 +167,17 @@ int main(void)
         sh1106_print_line(4, "Temp: -- C");
         sh1106_print_line(5, "Humi: -- %");
         sh1106_set_cursor(0, 6);
-        sh1106_puts("I2C dev: ");
+        sh1106_puts("I2C:");
         sh1106_put_uint(n);
-        for (uint8_t i = 0; i < n && i < 3; i++) {
-            sh1106_set_cursor((uint8_t)(i * 40u), 7);
-            sh1106_putc('0');
-            sh1106_putc('x');
+        for (uint8_t i = 0; i < n && i < 4; i++) {
+            sh1106_putc(' ');
             sh1106_put_hex8(found[i]);
         }
     }
+
+    uart_probe_and_show();
+
+    buzzer_tone(2300, 120);         /* boot chirp (works for a passive buzzer) */
 
     if (s_rtc_ok) {
         rtc_task();                 /* show the time straight away ... */
@@ -139,6 +189,6 @@ int main(void)
     for (;;) {
         sched_tick();
         buzzer_tick();
-        /* further scheduled jobs (WiFi upload) join here later */
+        /* the ESP-01 AT state machine joins here in Step 8b */
     }
 }

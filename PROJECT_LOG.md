@@ -15,7 +15,8 @@ Running record of what's done and what's next. Updated at the end of every step.
 | 5 | SH1106 128×64 OLED driver: init (with the 2 px column offset), `set_cursor`, 5×8 ASCII text, `clear`. | ✅ |
 | 6 | DS1307 RTC driver: BCD conversion, get/set time, auto-seed from build time when the clock-halt bit is set; show time on the OLED. | ✅ |
 | 7 | DHT11 driver: single-wire read, checksum validation, retry policy, interrupts masked during the timing-critical read. | ✅ |
-| 8 | USART driver (interrupt-driven RX ring buffer) + ESP-01 non-blocking AT state machine (reset → join AP → TCP → HTTP GET → close). May split into 8a/8b. | ⬜ |
+| 8a | USART (UART) HAL: USART0 8-N-1, interrupt-driven RX ring buffer, blocking TX; boot-time ESP-01 "AT" probe shown on the OLED. | ✅ |
+| 8b | ESP-01 AT layer: non-blocking AT state machine (reset → join AP → open TCP → HTTP GET → close), ticked from the superloop; untracked `app_config.h` (SSID/pass, telemetry host/path) from a committed `.example`; WiFi state on the OLED. | ⬜ |
 | 9 | Application integration: state machine — sample → OLED with timestamp → threshold check → RGB-LED + buzzer alert → telemetry upload; graceful degradation when WiFi/ESP is unavailable. | ⬜ |
 | 10 | Polish: `app_config.h(.example)` for thresholds & WiFi creds, watchdog timer, error/status surfaced on the OLED, README/log finalization. | ⬜ |
 
@@ -110,6 +111,17 @@ Running record of what's done and what's next. Updated at the end of every step.
   4. *(sanity)* No visible glitch in the 1 Hz clock when a DHT read happens (the ~5 ms interrupts-off window is invisible); the buzzer chirp at boot is its usual ~120 ms.
   5. *(troubleshooting)* Always `Temp: 0 C` / `Humi: 0 %` or wild values → check the pull-up and that `DHT11_PIN` matches your wiring. Persistent `no sensor?` → no pull-up, wrong pin, or the DHT11 wasn't given ~1 s after power-up (the 2 s first-read delay should cover it).
 
+### Step 8a — USART (UART) HAL ✅
+- `src/hal/uart.{c,h}`: USART0, 8-N-1, baud computed from `F_CPU` (`uart_init(baud)` — using 9600 for the ESP-01, UBRR = 51 at 8 MHz, ~0.16 % error). Interrupt-driven RX into a power-of-two ring buffer (`UART_RX_BUF_SIZE`, default 64; overflow drops the new byte). API: `uart_putc/puts/puts_p/write` (blocking TX), `uart_available`, `uart_getc` (→ `-1` if empty), `uart_flush_rx`. Single-producer/single-consumer ring — no `cli()` needed in the readers (byte-sized volatile head/tail are atomic on AVR).
+- `src/main.c`: `uart_init(9600)` in the boot sequence; `uart_probe_and_show()` (after the OLED setup, before the boot chirp) waits 500 ms for the ESP-01 to boot, then sends "AT\r\n" up to 3× and looks for an "OK" reply — line 7 shows `ESP-01: ready`, or `UART rx: <first printable chars>` (e.g. `AT` for a TX→RX loopback, or junk for a wrong-baud module), or `UART: no reply`. The I²C address list moved to line 6 next to the device count (`I2C:N 3C 68`). The boot chirp now fires *after* the probe so it isn't stretched by the probe's `_delay_ms` calls.
+- `CMakeLists.txt`: added `src/hal/uart.c`. README + CLAUDE.md updated.
+- **Validation:**
+  1. `cmake --build --preset default` compiles clean under `-Wall -Wextra`; `avr-size` grows ~0.3–0.4 KB flash + 64 B SRAM (the RX buffer).
+  2. *(UART path, no ESP-01 needed)* Jumper PD1 (TX) to PD0 (RX) → on power-up line 7 shows `UART rx: AT` — confirms TX out + RX/ISR/ring-buffer in. Remove the jumper → `UART: no reply`.
+  3. *(ESP-01)* With the ESP-01 wired (TXD↔PD0, RXD↔PD1, common ground; **module reconfigured to 9600** via `AT+UART_DEF=9600,8,1,0,0` from a USB-serial adapter) → line 7 shows `ESP-01: ready`. If it still shows junk / no reply, the module is at the wrong baud (reflash its UART setting) or the TX/RX wires are swapped.
+  4. *(non-regression)* The clock still ticks, temp/humidity still update, the green LED is unchanged — the UART probe is a one-shot at boot (~1 s of `_delay_ms`, before the superloop) and doesn't touch the scheduled jobs.
+- *(pin-map fix, post-8a)* User flagged that `PB3/PB4/PB5` are wired to the ISP programmer. Rearranged so nothing collides with them: RGB LED → `PB0/PB1/PB2` (R/G/B, contiguous, just below the ISP pins), DHT11 → `PC0`. No code change (drivers reference `LED_R/G/B_PIN` / `DHT11_PIN` symbolically); just `board.h` (pin map + a full header comment, comments synced to values) + the docs. README gained a "Pin map" table.
+
 ## Key decisions
 
 - **Language:** C, `-std=gnu11`, `-Os -g -Wall -Wextra`, sections GC'd.
@@ -122,10 +134,10 @@ Running record of what's done and what's next. Updated at the end of every step.
 - **Alert (visual):** RGB LED module **HW-479** (assumed common-cathode → active-high; one toggle in `board.h` to flip). Digital on/off per channel → 7 colours; e.g. green = normal, red blink = over `TEMP_ALERT_C` (default 30 °C). Hardware-PWM colour mixing is a possible later extension. Buzzer added alongside (see below).
 - **Alert (audible):** buzzer module on its own GPIO; short beep on entering the alert state (optional periodic chirp while in alert). Active-buzzer (GPIO on/off) vs passive-buzzer (timer-driven tone) handling TBD by the hardware.
 - **Watchdog:** added in Step 10 (~2 s, kicked from the loop).
-- **Provisional pins** (in `board.h`, user owns wiring): DHT11 → `PB0`; RGB LED → `PB1` (R) / `PB2` (G) / `PB3` (B); buzzer → `PD3`; I²C → `PC4/PC5` (fixed); UART → `PD0/PD1` (fixed); optional `ESP_RST` left commented (assumes CH_PD tied high).
+- **Pin map** (in `board.h`, user owns wiring): RGB LED → `PB0` (R) / `PB1` (G) / `PB2` (B) — kept clear of **`PB3/PB4/PB5` (+ `PC6`/RESET), which are reserved for the ISP loader**; DHT11 → `PC0`; buzzer → `PD3` (= OC2B); I²C → `PC4/PC5` (fixed; OLED + RTC share the bus); UART → `PD0` RXD ← ESP-01 TX / `PD1` TXD → ESP-01 RX (fixed; the ESP's RX/TX cross over); optional `ESP_RST` → `PD4` left commented (else tie ESP `RST`+`CH_PD` to 3.3 V). `board.h` has a full pin-map header comment.
 - **Host unit tests:** skipped for now (firmware-only); may add later for BCD/checksum/parse logic.
 - **Branch:** `master`. **License:** MIT.
 
 ## Next up
 
-**Step 8 — USART driver + ESP-01 AT layer** (`hal/uart.{c,h}` + `drivers/esp01.{c,h}`): interrupt-driven USART RX ring buffer @ 9600 baud, plus a non-blocking AT state machine (reset → join AP → open TCP → HTTP GET → close), ticked from the superloop so a slow upload never freezes the OLED. WiFi SSID/pass + telemetry host/path come from an untracked `app_config.h` (generated from a committed `app_config.h.example`; created in this step or Step 10). May split 8a (UART) / 8b (ESP-01). `main.c` will show WiFi state on the OLED and upload temp/humidity periodically. Starts after the Step 7 commit.
+**Step 8b — ESP-01 AT layer** (`drivers/esp01.{c,h}`): a non-blocking AT state machine on top of `hal/uart` — reset (`AT+RST`) → check/set CWMODE → join the AP (`AT+CWJAP`) → wait for an IP → open a TCP connection (`AT+CIPSTART`) → send an HTTP `GET` (`AT+CIPSEND` + the request) → read the status line → close (`AT+CIPCLOSE`), with per-step timeouts and retry/backoff so a slow or absent module never freezes the OLED. `esp01_tick()` runs from the superloop; `esp01_post(temp, humidity)` queues an upload. WiFi SSID/pass + telemetry host/port/path live in an **untracked `app_config.h`** generated from a committed `app_config.h.example`. `main.c` shows the WiFi/upload state on the OLED and triggers a post every N minutes. Starts after the Step 8a commit.

@@ -5,11 +5,12 @@ It reads a DHT11, timestamps readings with a DS1307 RTC, shows status on an
 SH1106 OLED, raises an RGB-LED + buzzer alert above a threshold, and pushes
 telemetry to the cloud over an ESP-01 WiFi module (UART AT commands).
 
-> **Status:** Step 7 of 10 complete — build system, a 1 ms `millis()` tick, GPIO
-> helpers, a cooperative scheduler, a blocking-with-timeout I²C (TWI) master +
-> bus scanner, the RGB-LED (HW-479), buzzer, SH1106 OLED, DS1307 RTC, and DHT11
-> drivers are in place. The OLED shows a live date/time clock plus temperature &
-> humidity refreshed every 2 s; the RGB LED mirrors OLED bring-up status. See
+> **Status:** Step 8a of 10 complete — build system, a 1 ms `millis()` tick,
+> GPIO helpers, a cooperative scheduler, an I²C (TWI) master + bus scanner, an
+> interrupt-driven USART driver, and the RGB-LED (HW-479) / buzzer / SH1106 OLED
+> / DS1307 RTC / DHT11 drivers are in place. The OLED shows a live clock + temp
+> & humidity; at boot the firmware pings the ESP-01 over the UART and reports the
+> result. Step 8b adds the ESP-01 AT state machine + WiFi upload. See
 > [`PROJECT_LOG.md`](PROJECT_LOG.md) for the full roadmap and progress.
 
 ## Hardware
@@ -25,7 +26,26 @@ telemetry to the cloud over an ESP-01 WiFi module (UART AT commands).
 | Alert (audible)  | Buzzer module         | GPIO                            |
 
 Wiring, level shifting and circuit design are handled outside this repo; the
-firmware treats the pin map as configuration (see `board.h`, added in Step 2).
+firmware treats the pin map as configuration. All assignments live in one place,
+[`src/board.h`](src/board.h) — change them there, the drivers don't care.
+
+### Pin map (defaults in `board.h`)
+
+| Signal | ATmega328P pin | Goes to | Notes |
+|---|---|---|---|
+| RGB LED — R / G / B | **PB0 / PB1 / PB2** | HW-479 `R` / `G` / `B` | common cathode → HW-479 `−` to GND; series resistors are on the module |
+| DHT11 data | **PC0** | DHT11 `DATA`/`OUT` | needs an external pull-up on the line (it's on the usual DHT11 breakout) |
+| Buzzer signal | **PD3** | MH-FMD `S`/`I/O` | = OC2B, so Timer2 can tone-drive a passive buzzer; if it's on at rest, set `BUZZER_ACTIVE_HIGH = 0` |
+| I²C SDA / SCL | **PC4 / PC5** (fixed) | SH1106 `SDA`/`SCL` **and** DS1307 `SDA`/`SCL` | shared bus — wire SDAs together, SCLs together; one ~4.7 kΩ pull-up pair to VCC |
+| UART TXD → ESP-01 RX | **PD1** (fixed) | ESP-01 `RX` (`U0RXD`) | **MCU TX → ESP RX** — the ESP-01's RX/TX cross over |
+| UART RXD ← ESP-01 TX | **PD0** (fixed) | ESP-01 `TX` (`U0TXD`) | **MCU RX → ESP TX** |
+| ESP-01 reset (optional) | PD4 | ESP-01 `RST` | only if you uncomment `ESP_RST_PIN`; otherwise tie ESP `RST` + `CH_PD` to 3.3 V |
+| ISP — MOSI / MISO / SCK / RESET | PB3 / PB4 / PB5 / PC6 (RESET) | your programmer | **reserved for the loader** — don't reuse PB3/PB4/PB5 |
+| XTAL1 / XTAL2 | PB6 / PB7 | 8 MHz crystal, *if used* | free GPIO only when running the internal 8 MHz RC |
+
+Only the ESP-01 uses the UART; the OLED + RTC share the I²C bus; the DHT11, the
+three RGB-LED channels and the buzzer are plain GPIO. The ESP-01 is a 3.3 V part
+— if the MCU runs at 5 V, level-shift the **MCU TX → ESP RX** line down to 3.3 V.
 
 ## Repository layout
 
@@ -40,7 +60,8 @@ heat-sentinel/
 │  ├─ hal/                         # hardware layer
 │  │  ├─ gpio.h                    # zero-cost GPIO macros, pins as (LETTER, BIT)
 │  │  ├─ timer.{c,h}               # Timer0 -> 1 ms millis() tick
-│  │  └─ i2c.{c,h}                 # TWI master (blocking + timeout) + bus scanner
+│  │  ├─ i2c.{c,h}                 # TWI master (blocking + timeout) + bus scanner
+│  │  └─ uart.{c,h}                # USART0 8-N-1: IRQ RX ring buffer + blocking TX
 │  ├─ drivers/
 │  │  ├─ led.{c,h}                 # RGB LED (HW-479) on LED_R/G/B_PIN — named colours
 │  │  ├─ buzzer.{c,h}              # buzzer: on/off + beep(ms); tone(freq,ms) via Timer2/OC2B
@@ -154,12 +175,13 @@ the `flash` target on purpose.)
 
 ## Notes / current limitations
 
-- The application logic is still a stand-in: `main.c` chirps the buzzer, scans
-  the I²C bus, brings up the OLED, seeds the RTC if halted, then runs scheduled
-  jobs — a 1 Hz clock refresh and a 2 s DHT11 read (temp/humidity on screen).
-  RGB LED: **green** if the OLED is up, **yellow** if devices were found but the
-  OLED didn't init, **red** if nothing answered. The threshold-driven RGB/buzzer
-  alert and the WiFi upload land in Steps 8–9.
+- The application logic is still a stand-in: `main.c` brings up the OLED / RTC /
+  DHT11, pings the ESP-01 over the UART (shown on line 7: `ESP-01: ready` /
+  `UART rx: …` / `UART: no reply`), chirps the buzzer, then runs scheduled jobs —
+  a 1 Hz clock refresh and a 2 s DHT11 read. RGB LED: **green** if the OLED is
+  up, **yellow** if devices were found but the OLED didn't init, **red** if
+  nothing answered. The ESP-01 AT state machine + WiFi upload (Step 8b) and the
+  threshold-driven RGB/buzzer alert (Step 9) are still to come.
 - OLED driver is **framebuffer-less** (text written straight to the SH1106 — no
   1 KB shadow buffer): a 5×8 font, 21 chars × 8 lines, `'\n'`/right-edge wrap.
   `SH1106_I2C_ADDR` (default `0x3C`), `SH1106_FLIP_180` and `SH1106_COL_OFFSET`
@@ -181,9 +203,14 @@ the `flash` target on purpose.)
   2 s). Interrupts are masked for the ~5 ms of bit timing — `millis()` loses a
   few ms per read (immaterial; the DS1307 is the authoritative clock). The data
   line's pull-up is part of your hardware (it's on the usual DHT11 breakout).
+- UART: USART0 (RXD=PD0, TXD=PD1) at **9600 baud** — your ESP-01 must be set to
+  that, e.g. `AT+UART_DEF=9600,8,1,0,0` via a USB-serial adapter (its factory
+  default is usually 115200, which has too much error at 8 MHz). RX is
+  interrupt-driven into a 64-byte ring buffer; TX is blocking.
 - I²C runs at 100 kHz (the DS1307's maximum); SDA/SCL **external pull-ups are
   part of your hardware** — the firmware does not enable the AVR's internal ones.
-- No ESP-01 driver yet; it arrives in Step 8.
+- No ESP-01 AT layer yet; it arrives in Step 8b (along with the untracked
+  `app_config.h` for WiFi credentials + telemetry endpoint).
 - WiFi credentials and the telemetry endpoint will live in an untracked
   `app_config.h` generated from a committed `app_config.h.example` (Step 10).
 
