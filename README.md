@@ -5,25 +5,21 @@ It reads a DHT11, timestamps readings with a DS1307 RTC, shows status on an
 SH1106 OLED, raises an RGB-LED + buzzer alert above a threshold, and pushes
 telemetry to the cloud over an ESP-01 WiFi module (UART AT commands).
 
-> **Status:** Step 8a of 10 complete — build system, a 1 ms `millis()` tick,
-> GPIO helpers, a cooperative scheduler, an I²C (TWI) master + bus scanner, an
-> interrupt-driven USART driver, and the RGB-LED (HW-479) / buzzer / SH1106 OLED
-> / DS1307 RTC / DHT11 drivers are in place. The OLED shows a live clock + temp
-> & humidity; at boot the firmware pings the ESP-01 over the UART and reports the
-> result. Step 8b adds the ESP-01 AT state machine + WiFi upload. See
+> **Status:** Step 8b of 10 complete — added non-blocking ESP-01 AT state machine and WiFi upload. See
 > [`PROJECT_LOG.md`](PROJECT_LOG.md) for the full roadmap and progress.
 
 ## Hardware
 
-| Role             | Part                  | Interface                       |
-|------------------|-----------------------|---------------------------------|
-| MCU              | ATmega328P            | 8 MHz (`F_CPU = 8000000UL`)     |
-| Temp / Humidity  | DHT11                 | single-wire GPIO                |
-| Display          | SH1106 OLED           | I²C (TWI), 128×64               |
-| Real-time clock  | DS1307                | I²C (TWI)                       |
-| WiFi             | ESP-01                | USART, AT commands @ 9600 baud  |
-| Alert (visual)   | RGB LED module HW-479 | 3× GPIO (one pin per colour)    |
-| Alert (audible)  | Buzzer module         | GPIO                            |
+| Role            | Part                  | Interface                      |
+|-----------------|-----------------------|--------------------------------|
+| MCU             | ATmega328P            | 8 MHz (`F_CPU = 8000000UL`)    |
+| Temp / Humidity | DHT11                 | single-wire GPIO               |
+| Temp (Analog)   | TMP35                 | Analog (ADC)                   |
+| Display         | SH1106 OLED           | I²C (TWI), 128×64              |
+| Real-time clock | DS1307                | I²C (TWI)                      |
+| WiFi            | ESP-01                | USART, AT commands @ 9600 baud |
+| Alert (visual)  | RGB LED module HW-479 | 3× GPIO (one pin per colour)   |
+| Alert (audible) | Buzzer module         | GPIO                           |
 
 Wiring, level shifting and circuit design are handled outside this repo; the
 firmware treats the pin map as configuration. All assignments live in one place,
@@ -31,17 +27,18 @@ firmware treats the pin map as configuration. All assignments live in one place,
 
 ### Pin map (defaults in `board.h`)
 
-| Signal | ATmega328P pin | Goes to | Notes |
-|---|---|---|---|
-| RGB LED — R / G / B | **PB0 / PB1 / PB2** | HW-479 `R` / `G` / `B` | common cathode → HW-479 `−` to GND; series resistors are on the module |
-| DHT11 data | **PC0** | DHT11 `DATA`/`OUT` | needs an external pull-up on the line (it's on the usual DHT11 breakout) |
-| Buzzer signal | **PD3** | MH-FMD `S`/`I/O` | = OC2B, so Timer2 can tone-drive a passive buzzer; if it's on at rest, set `BUZZER_ACTIVE_HIGH = 0` |
-| I²C SDA / SCL | **PC4 / PC5** (fixed) | SH1106 `SDA`/`SCL` **and** DS1307 `SDA`/`SCL` | shared bus — wire SDAs together, SCLs together; one ~4.7 kΩ pull-up pair to VCC |
-| UART TXD → ESP-01 RX | **PD1** (fixed) | ESP-01 `RX` (`U0RXD`) | **MCU TX → ESP RX** — the ESP-01's RX/TX cross over |
-| UART RXD ← ESP-01 TX | **PD0** (fixed) | ESP-01 `TX` (`U0TXD`) | **MCU RX → ESP TX** |
-| ESP-01 reset (optional) | PD4 | ESP-01 `RST` | only if you uncomment `ESP_RST_PIN`; otherwise tie ESP `RST` + `CH_PD` to 3.3 V |
-| ISP — MOSI / MISO / SCK / RESET | PB3 / PB4 / PB5 / PC6 (RESET) | your programmer | **reserved for the loader** — don't reuse PB3/PB4/PB5 |
-| XTAL1 / XTAL2 | PB6 / PB7 | 8 MHz crystal, *if used* | free GPIO only when running the internal 8 MHz RC |
+| Signal                          | ATmega328P pin                | Goes to                                        | Notes                                                                                                |
+|---------------------------------|-------------------------------|------------------------------------------------|------------------------------------------------------------------------------------------------------|
+| RGB LED — R / G / B             | **PB0 / PB1 / PB2**           | HW-479 `R` / `G` / `B`                         | common cathode → HW-479 `−` to GND; series resistors are on the module                               |
+| DHT11 data                      | **PC0**                       | DHT11 `DATA`/`OUT`                             | needs an external pull-up on the line (it's on the usual DHT11 breakout)                             |
+| TMP35 VOUT                      | **PC1**                       | TMP35 VOUT                                     | Analog input (ADC1); formula assumes 5V system                                                       |
+| Buzzer signal                   | **PD3**                       | MH-FMD `S`/`I/O`                               | = OC2B, so Timer2 can tone-drive a passive buzzer; if it's on at rest, set `BUZZER_ACTIVE_HIGH = 0`  |
+| I²C SDA / SCL                   | **PC4 / PC5** (fixed)         | SH1106 `SDA`/`SCL` **and** DS1307 `SDA`/`SCL`  | shared bus — wire SDAs together, SCLs together; one ~4.7 kΩ pull-up pair to VCC                      |
+| UART TXD → ESP-01 RX            | **PD1** (fixed)               | ESP-01 `RX` (`U0RXD`)                          | **MCU TX → ESP RX** — the ESP-01's RX/TX cross over                                                  |
+| UART RXD ← ESP-01 TX            | **PD0** (fixed)               | ESP-01 `TX` (`U0TXD`)                          | **MCU RX → ESP TX**                                                                                  |
+| ESP-01 reset (optional)         | PD4                           | ESP-01 `RST`                                   | only if you uncomment `ESP_RST_PIN`; otherwise tie ESP `RST` + `CH_PD` to 3.3 V                      |
+| ISP — MOSI / MISO / SCK / RESET | PB3 / PB4 / PB5 / PC6 (RESET) | your programmer                                | **reserved for the loader** — don't reuse PB3/PB4/PB5                                                |
+| XTAL1 / XTAL2                   | PB6 / PB7                     | 8 MHz crystal, *if used*                       | free GPIO only when running the internal 8 MHz RC                                                    |
 
 Only the ESP-01 uses the UART; the OLED + RTC share the I²C bus; the DHT11, the
 three RGB-LED channels and the buzzer are plain GPIO. The ESP-01 is a 3.3 V part
@@ -58,6 +55,7 @@ heat-sentinel/
 │  ├─ board.h                      # pin map + F_CPU (the only place pins live)
 │  ├─ main.c                       # superloop: init + register scheduled jobs
 │  ├─ hal/                         # hardware layer
+│  │  ├─ adc.{c,h}                 # 10-bit ADC driver (polling)
 │  │  ├─ gpio.h                    # zero-cost GPIO macros, pins as (LETTER, BIT)
 │  │  ├─ timer.{c,h}               # Timer0 -> 1 ms millis() tick
 │  │  ├─ i2c.{c,h}                 # TWI master (blocking + timeout) + bus scanner
@@ -67,7 +65,8 @@ heat-sentinel/
 │  │  ├─ buzzer.{c,h}              # buzzer: on/off + beep(ms); tone(freq,ms) via Timer2/OC2B
 │  │  ├─ sh1106.{c,h}              # SH1106 128×64 OLED — text (5×8 font), no framebuffer
 │  │  ├─ ds1307.{c,h}              # DS1307 RTC — BCD time get/set; seed from build time on cold start
-│  │  └─ dht11.{c,h}               # DHT11 temp/humidity — bit-banged, checksum, cli() during the read
+│  │  ├─ dht11.{c,h}               # DHT11 temp/humidity — bit-banged, checksum, cli() during the read
+│  │  └─ tmp35.{c,h}               # TMP35 analog temp sensor (10mV/C)
 │  └─ app/
 │     └─ scheduler.{c,h}           # cooperative {period, last_run, fn} scheduler
 ├─ README.md                       # this file (kept up to date each step)
@@ -139,11 +138,11 @@ cmake --build build --target flash
 
 `avrdude` settings are CMake cache variables — override them at configure time:
 
-| Variable             | Default  | Meaning                                   |
-|----------------------|----------|-------------------------------------------|
-| `AVRDUDE_PROGRAMMER` | `usbasp` | `avrdude -c` (e.g. `usbasp`, `arduino`)   |
-| `AVRDUDE_PORT`       | `usb`    | `avrdude -P` (e.g. `usb`, `COM3`, `/dev/ttyUSB0`) |
-| `AVRDUDE_BAUD`       | *(empty)*| `avrdude -b` (only needed for some programmers) |
+| Variable             | Default   | Meaning                                           |
+|----------------------|-----------|---------------------------------------------------|
+| `AVRDUDE_PROGRAMMER` | `usbasp`  | `avrdude -c` (e.g. `usbasp`, `arduino`)           |
+| `AVRDUDE_PORT`       | `usb`     | `avrdude -P` (e.g. `usb`, `COM3`, `/dev/ttyUSB0`) |
+| `AVRDUDE_BAUD`       | *(empty)* | `avrdude -b` (only needed for some programmers)   |
 
 Examples:
 

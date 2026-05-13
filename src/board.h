@@ -57,4 +57,8 @@
  * (otherwise tie the ESP-01's RST + CH_PD to 3.3 V): */
 /* #define ESP_RST_PIN   D, 4 */ /* PD4, active low */
 
+/* --- TMP35 Analog Temperature Sensor ---
+ * Connected to PC1 (ADC1). Formula assumes 5V AVCC reference. */
+#define TMP35_ADC_CH     1       /* PC1 = ADC Channel 1 */
+
 #endif /* BOARD_H */

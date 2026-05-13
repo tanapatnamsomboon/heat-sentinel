@@ -1,0 +1,19 @@
+#ifndef APP_CONFIG_H
+#define APP_CONFIG_H
+
+/*
+ * Copy this file to src/app_config.h and fill in your details.
+ * app_config.h is ignored by git.
+ */
+
+#define WIFI_SSID       "YourWiFiSSID"
+#define WIFI_PASS       "YourWiFiPassword"
+
+#define TELEMETRY_HOST  "api.thingspeak.com"
+#define TELEMETRY_PORT  80
+
+/* Example for ThingSpeak: "/update?api_key=YOUR_WRITE_API_KEY"
+ * The ESP-01 driver will append "&field1=T&field2=H" to this path. */
+#define TELEMETRY_PATH  "/update?api_key=XXXXXXXXXXXXXXXX"
+
+#endif /* APP_CONFIG_H */

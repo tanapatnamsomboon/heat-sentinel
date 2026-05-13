@@ -31,11 +31,14 @@ add_executable(${FW_TARGET}
     src/hal/timer.c
     src/hal/i2c.c
     src/hal/uart.c
+    src/hal/adc.c
     src/drivers/led.c
     src/drivers/buzzer.c
     src/drivers/sh1106.c
     src/drivers/ds1307.c
     src/drivers/dht11.c
+    src/drivers/tmp35.c
+    src/drivers/esp01.c
     src/app/scheduler.c
 )
 

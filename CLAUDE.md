@@ -101,18 +101,14 @@ Step 8a complete. In place:
 - `drivers/dht11.{c,h}` — DHT11 on `DHT11_PIN` (PB0). `dht11_status_t`, `dht11_reading_t { humidity, temperature }` (8-bit). `dht11_init()`, `dht11_read(out)` — enforces `DHT11_MIN_INTERVAL_MS` (2 s) returning `DHT11_BUSY`; 20 ms start pulse (IRQs on) then `ATOMIC_BLOCK` (IRQs off, ~5 ms) for the response + 40 bits; checksum-validated; phase waits bounded by `DHT11_PHASE_LOOPS`. Single attempt per call — the scheduler re-reads every 2 s.
 - `app/scheduler.{c,h}` — fixed-table cooperative scheduler: `sched_add(period_ms, fn)` + `sched_tick()`, wraparound-safe.
 - `main.c` — superloop: inits (incl. `uart_init(9600)`), boot-time `i2c_scan()`, `sh1106_init()`, `ds1307_init_or_seed()`, `dht11_init()`; `uart_probe_and_show()` pings the ESP-01 with "AT" and shows the result on OLED line 7; boot chirp; a 1 Hz `rtc_task` (date/time) + 2 s `dht_task` (temp/humidity). RGB colour mirrors OLED status (green/yellow/red); calls `sched_tick()` + `buzzer_tick()`. Still a stand-in for the real app logic.
+- `drivers/esp01.{c,h}` — ESP-01 AT state machine. `esp01_init/tick/post/get_state_str`. Handled entirely asynchronously using `millis()` timeouts.
 
 Timer usage so far: **Timer0** = `millis()`; **Timer2** = buzzer tone (only while sounding); **Timer1** = free.
 
 Sources live under `src/` with `src/` on the include path; every new `.c` must be
 added to `add_executable(...)` in `CMakeLists.txt` (no globbing).
 
-Next: Step 8b — `drivers/esp01.{c,h}`: non-blocking AT state machine on `hal/uart`
-(reset → CWMODE → CWJAP → wait IP → CIPSTART → CIPSEND HTTP GET → read status →
-CIPCLOSE), per-step timeouts + retry/backoff, `esp01_tick()` from the superloop,
-`esp01_post(temp, humidity)` queues an upload. Untracked `app_config.h`
-(SSID/pass, telemetry host/port/path) from a committed `app_config.h.example`.
-`main.c` shows WiFi/upload state on the OLED + posts periodically.
+Next: Step 9 — Application integration: threshold check -> RGB-LED + buzzer alert, graceful degradation.
 
 ## Reference: old code from another project
 

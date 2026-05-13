@@ -17,6 +17,7 @@ Running record of what's done and what's next. Updated at the end of every step.
 | 7 | DHT11 driver: single-wire read, checksum validation, retry policy, interrupts masked during the timing-critical read. | ✅ |
 | 8a | USART (UART) HAL: USART0 8-N-1, interrupt-driven RX ring buffer, blocking TX; boot-time ESP-01 "AT" probe shown on the OLED. | ✅ |
 | 8b | ESP-01 AT layer: non-blocking AT state machine (reset → join AP → open TCP → HTTP GET → close), ticked from the superloop; untracked `app_config.h` (SSID/pass, telemetry host/path) from a committed `.example`; WiFi state on the OLED. | ⬜ |
+| 8c | TMP35 analog temperature sensor integration: ADC HAL (`hal/adc`), TMP35 driver (10mV/°C conversion), and OLED display logic. | ✅ |
 | 9 | Application integration: state machine — sample → OLED with timestamp → threshold check → RGB-LED + buzzer alert → telemetry upload; graceful degradation when WiFi/ESP is unavailable. | ⬜ |
 | 10 | Polish: `app_config.h(.example)` for thresholds & WiFi creds, watchdog timer, error/status surfaced on the OLED, README/log finalization. | ⬜ |
 
@@ -121,6 +122,23 @@ Running record of what's done and what's next. Updated at the end of every step.
   3. *(ESP-01)* With the ESP-01 wired (TXD↔PD0, RXD↔PD1, common ground; **module reconfigured to 9600** via `AT+UART_DEF=9600,8,1,0,0` from a USB-serial adapter) → line 7 shows `ESP-01: ready`. If it still shows junk / no reply, the module is at the wrong baud (reflash its UART setting) or the TX/RX wires are swapped.
   4. *(non-regression)* The clock still ticks, temp/humidity still update, the green LED is unchanged — the UART probe is a one-shot at boot (~1 s of `_delay_ms`, before the superloop) and doesn't touch the scheduled jobs.
 - *(pin-map fix, post-8a)* User flagged that `PB3/PB4/PB5` are wired to the ISP programmer. Rearranged so nothing collides with them: RGB LED → `PB0/PB1/PB2` (R/G/B, contiguous, just below the ISP pins), DHT11 → `PC0`. No code change (drivers reference `LED_R/G/B_PIN` / `DHT11_PIN` symbolically); just `board.h` (pin map + a full header comment, comments synced to values) + the docs. README gained a "Pin map" table.
+
+### Step 8b — ESP-01 AT layer ✅
+- `src/app_config.h.example`: Template for `WIFI_SSID`, `WIFI_PASS`, and the telemetry HTTP GET endpoint.
+- `src/drivers/esp01.{c,h}`: Non-blocking AT command state machine (Reset → CWMODE → CWJAP → TCP/HTTP GET) hooked into the UART RX ring buffer. Relies on `millis()` timeouts per state so a dropped network or unresponsive module never freezes the superloop.
+- `src/main.c`: Removed the boot-time `uart_probe_and_show()`. Now calls `esp01_tick()` in the superloop, updates the WiFi state on OLED line 7 every 500 ms, and triggers an `esp01_post()` with the cached temp/humidity every 30 seconds.
+- **Validation:** 1. Copy `src/app_config.h.example` to `src/app_config.h` and populate with actual credentials.
+  2. `cmake --build --preset default` compiles clean.
+  3. *(hardware)* On boot, OLED line 7 cycles through: Booting → Config → Joining → Wait IP → Idle (WiFi OK). Every 30 seconds, the state briefly changes to TCP Connect → Uploading → Closing before returning to Idle.
+
+### Step 8c — TMP35 Analog Sensor ✅
+- **Hardware:** Added TMP35 on `PC1` (ADC1).
+- `src/hal/adc.{c,h}`: 10-bit ADC driver using AVCC (5V) as reference, prescaler set to 64 for 125 kHz ADC clock.
+- `src/drivers/tmp35.{c,h}`: TMP35 driver converting ADC reading to Celsius * 10 (integer math: `(val * 5000) / 1024`).
+- `src/main.c`: Compacted DHT11 display to line 4, added `tmp35_task` to read and display temperature on line 5 (with 1 decimal place) every 1 second.
+- **Validation:** 1. Build with `cmake --build --preset default`.
+  2. (Hardware) Connect TMP35: VS to 5V, GND to GND, VOUT to PC1.
+  3. Screen line 5 should display `TMP: XX.X C` updating every second. Pinching the sensor should cause the temperature to rise quickly.
 
 ## Key decisions
 
