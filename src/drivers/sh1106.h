@@ -47,5 +47,6 @@ void sh1106_print_line(uint8_t page, const char *s);   /* clear_line(page) then 
 
 void sh1106_set_inverted(bool inv);             /* swap black/white */
 void sh1106_set_on(bool on);                    /* panel on / off (low-power sleep) */
+void sh1106_set_contrast(uint8_t contrast);     /* 0 to 255 (0x00 is dimmest, 0xFF is brightest) */
 
 #endif /* DRIVERS_SH1106_H */

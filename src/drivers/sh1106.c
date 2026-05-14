@@ -264,3 +264,9 @@ void sh1106_set_on(bool on)
     uint8_t c = on ? 0xAFu : 0xAEu;
     (void)sh1106_cmds(&c, 1);
 }
+
+void sh1106_set_contrast(uint8_t contrast)
+{
+    uint8_t seq[2] = { 0x81, contrast };
+    (void)sh1106_cmds(seq, 2);
+}
