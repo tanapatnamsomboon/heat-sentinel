@@ -34,12 +34,12 @@ add_executable(${FW_TARGET}
     src/hal/adc.c
     src/hal/spi.c
     src/drivers/mcp3201.c
+    src/drivers/ldr.c      # <-- Add this line
     src/drivers/led.c
     src/drivers/buzzer.c
     src/drivers/sh1106.c
     src/drivers/ds1307.c
     src/drivers/dht11.c
-    src/drivers/tmp35.c
     src/drivers/esp01.c
     src/app/scheduler.c
 )

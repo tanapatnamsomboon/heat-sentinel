@@ -44,7 +44,7 @@
 #define LED_RGB_ACTIVE_HIGH  1   /* HW-479 is common-cathode: 1 = drive pin HIGH to light */
 
 /* --- DHT11 temperature/humidity sensor (single-wire GPIO) --- */
-#define DHT11_PIN        C, 0    /* PC0 - needs an external pull-up on the data line */
+#define DHT11_PIN        D, 7    /* PD7 - needs an external pull-up on the data line */
 
 /* --- Alert buzzer: module (e.g. MH-FMD) on PD3 = OC2B (so a passive buzzer can
  * be tone-driven by Timer2). MH-FMD-style boards are often active-LOW - if the
@@ -63,7 +63,7 @@
 
 /* --- MCP3201 12-bit SPI ADC ---
  * Uses Hardware SPI: PB4 (MISO) and PB5 (SCK). These pins are shared with the ISP.
- * The Chip Select (CS) pin is assigned to PC2. */
-#define MCP3201_CS_PIN   C, 2    /* PC2 */
+ * The Chip Select (CS) pin is assigned to PC0. */
+#define MCP3201_CS_PIN   C, 0    /* PC0 */
 
 #endif /* BOARD_H */
